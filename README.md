@@ -25,11 +25,17 @@ SPACE-HOP/
 │   ├── configs/                 # *_vitb16_ep200.yaml configs
 │   └── src/                     # ViT models, datasets, masks, augmentations, train.py
 └── src/                          # pose estimation stage
-    ├── model.py                  # FastPoseViT: JEPA backbone + Hopf rotation head
+    ├── model.py                  # FastPoseViT: JEPA backbone + Hopf rotation head (pass 0)
     ├── hopf_grid.py              # Hopf fibration SO(3) anchor grid + closest-anchor search
     ├── train.py / val.py         # training / evaluation loops
     ├── box.py                    # 3D wireframe overlay visualization
     ├── datasets/speedplus.py     # SPEED+ dataset loader
+    ├── isro_data.py              # ISRO GSAT-12R dataset loader + oracle crop
+    ├── refine.py                 # Refiner ViT (diff/siamese patch embed, attention pooling)
+    ├── hopf_se3.py               # SE(3) Hopf-fibred iterative refiner (canonical-warp fibre removal)
+    ├── nested_se3.py             # retrieval-free nested coarse-to-fine SE(3) bin classifier
+    ├── spacehop_nested.py        # nested refiner folded into SPACE-HOP: one shared ViT, pass 0 + nested passes
+    ├── so3_nested.py             # strict-hierarchy Hopf-HEALPix SO(3) distribution grid (SYMSOL)
     ├── helper/jensen_audit.py    # symmetry-instability (Jensen Gain) diagnostic
     └── utils/                    # geometry, augmentation, image, plotting utilities
 ```
@@ -37,8 +43,8 @@ SPACE-HOP/
 ## Setup
 
 ```bash
-git clone https://github.com/Team-M3OW/SPACE-HOP.git
-cd SPACE-HOP
+git clone https://github.com/arsh-6626/SPACE-HOP-SE3.git
+cd SPACE-HOP-SE3
 pip install torch torchvision opencv-python pandas scipy numpy tqdm wandb pyyaml
 ```
 
@@ -82,6 +88,38 @@ PYTHON=python bash scripts/run_isro.sh   # JEPA pretraining -> pose training -> 
 - Pretraining (`ijepa/configs/isro_vitb16.yaml`) and pose training (`configs/isro.yaml`) use only the train split of `cv_splits4` fold 1. Model selection uses the fold-1 val split. `images/test` is evaluated once at the end.
 - Crops are squares centred on the projected landmarks, with side 1.6× their extent. They are derived from ground truth (oracle detection), as in the SPEED+ protocol. Train-time jitter is relative to the crop size.
 - `src/val.py` reports E_T (m), E_T/|t|, geodesic E_R (°) and E_T/|t| + E_R[rad]. It also writes per-image errors.
+
+## SE(3) Hopf refinement and nested distributions
+
+This fork extends SPACE-HOP from a single forward pass to a **coarse-to-fine SE(3) estimator**, and towards a
+**distribution** over pose rather than a point estimate. The base pose model is unchanged — it becomes *pass 0*.
+
+**Canonical-warp fibre removal (`src/hopf_se3.py`).** Camera-relative `SE(3)` is split into a 2-DoF base point (the
+*swing*: which side of the object faces the camera) and a 4-DoF fibre (viewing ray, in-plane roll, range). The fibre
+is removed *exactly* by warping the full image through a homography into a virtual camera pointed along the estimated
+ray and rolled by the estimated twist, with focal length set so the object fills a fixed-size crop. In that canonical
+view the only remaining error is a small residual, which a `[q, q − r]` ViT (`src/refine.py`) predicts and applies as
+an exact `SE(3)` update. Iterating re-warps at each step. (The ray/roll warp is exact; the range term is an
+approximate zoom, re-corrected each iteration.)
+
+**Retrieval-free nested classifier (`src/nested_se3.py`).** Instead of regressing the residual, classify it on local
+grids in the fibre coordinates — tilt (2-D), roll (1-D), ray offset (2-D), range (1-D) — with spacing shrinking by 3×
+each level, decoded with a sub-cell parabola fit. Gaussian-anchored bins give the classifier a regression-strength
+gradient while still representing skewed or multi-modal (ambiguous) residuals. No exemplar retrieval at test time.
+
+**One shared backbone (`src/spacehop_nested.py`).** The nested head is folded into SPACE-HOP so a *single* ViT serves
+both pass 0 (global Hopf grid) and the nested refinement passes (canonical warp), trained jointly with a
+frozen-backbone warm-up for the new head.
+
+**Distribution benchmarks (`src/so3_nested.py`).** For SYMSOL / SYMSOL-T, the overlapping refinement grid is replaced
+by the strict-hierarchy, equal-volume Hopf-HEALPix grid of [Implicit-PDF](https://implicit-pdf.github.io/)
+(72 cells at level 0, ×8 per level). A distribution is a categorical over level-0 cells and an 8-way categorical at
+each expanded node; the exact log-likelihood of a rotation is the summed log-probability along its cell path.
+`python src/so3_nested.py selftest` verifies the grid (exact cell round-trip; a uniform predictor reaches the
+`−ln(π²) ≈ −2.29` nats log-likelihood floor at every level).
+
+> These components are validated on an internal spacecraft dataset; public-benchmark (SYMSOL, T-LESS, YCB-V) training
+> and evaluation are in progress.
 
 ## Citation
 
