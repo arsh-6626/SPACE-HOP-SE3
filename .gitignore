@@ -1,4 +1,25 @@
+# weights / checkpoints
 checkpoints/
 *.pth
 *.pth.tar
-checkpoints/
+*.ckpt
+*.npz
+
+# datasets
+ISROGSAT12RDataset/
+data/
+dataset/
+*.jpg
+!images/*.png
+
+# experiment tracking / caches
+ijepa/wandb/
+wandb/
+cache/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# editor / os
+.DS_Store
+*.swp

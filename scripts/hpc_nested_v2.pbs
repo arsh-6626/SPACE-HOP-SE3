@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -N nested2
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=6:ngpus=1
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/nested2.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/nested2.err
+# Retrieval-free nested SE(3) Hopf classification, v2 (src_v3): Gaussian bins anchored on the --no_ref regression
+# head; 224 px for levels 0-1, 448 px for levels 2-4. Needs noref_coarse and noref_fine448 (job "nested").
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+C=$ROOT/checkpoints
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
+N="$PY src_v3/nested_se3.py"; H="$PY src_v3/hopf_se3.py"; CFG="--config configs/isro_hpc.yaml"
+SH=$C/hopf_se3_fixed; MON=$C/cascades/coarse_long
+set -x
+echo "=== $(date) job $PBS_JOBID on $(hostname)"
+mkdir -p $C/nested2_224 $C/nested2_448 $C/nested2_eval
+$N train $CFG --out $C/nested2_224 --img_size 224 --levels 0 1 --init $C/noref_coarse/last.pth --init_dir $SH \
+    --epochs 30 --lr 5e-5 --num_workers 5 --monitor 0,0,1 > $C/nested2_224/train.log 2>&1
+$N train $CFG --out $C/nested2_448 --img_size 448 --levels 2 3 4 --init $C/noref_fine448/last.pth --init_dir $MON \
+    --epochs 20 --lr 5e-5 --num_workers 5 --monitor 2,3,4 > $C/nested2_448/train.log 2>&1
+for split in val test; do
+  $N eval $CFG --split $split --init_dir $SH --out $C/nested2_eval/n224 \
+      --schedule $C/nested2_224/last.pth:0,0,1 >> $C/nested2_eval/n224.log 2>&1
+  $N eval $CFG --split $split --init_dir $SH --out $C/nested2_eval/n224_n448 \
+      --schedule $C/nested2_224/last.pth:0,0,1 $C/nested2_448/last.pth:2,3,4 >> $C/nested2_eval/n224_n448.log 2>&1
+done
+echo "=== $(date) NESTED2_DONE"

@@ -44,7 +44,7 @@ def compute_delta_rotation(T_batch, device):
     
     cross_prod = torch.cross(T_norm, ez, dim=-1) # Note: order matters for sign
     cross_norm = torch.norm(cross_prod, dim=-1, keepdim=True)
-    mask_singular = cross_norm.squeeze() < 1e-6
+    mask_singular = cross_norm.squeeze(-1) < 1e-6
     
     u = torch.zeros_like(T_norm)
     if not mask_singular.all():
@@ -172,3 +172,16 @@ def axis_angle_to_matrix(vec):
         R[mask] = I + torch.sin(t) * K + (1.0 - torch.cos(t)) * torch.bmm(K, K)
         
     return R
+
+def make_pose_targets(R_true, T_true, crop_params, K_batch, full_img_size):
+    """Training targets for a batch: apparent rotation R' (Eq. 8) and normalized translation U."""
+    R_apparent = compute_apparent_rotation(R_true, T_true)
+    if R_apparent.dim() == 2:
+        R_apparent = R_apparent.unsqueeze(0)
+    U = compute_normalized_coords_translation(T_true, crop_params, full_img_size, None, K_batch)
+    return R_apparent, U
+
+def rotation_error_deg(R_pred, R_gt):
+    """Per-sample geodesic distance on SO(3) in degrees."""
+    tr = torch.einsum('bij,bij->b', R_pred, R_gt)  # trace(R_pred^T R_gt)
+    return torch.rad2deg(torch.acos(torch.clamp((tr - 1.0) / 2.0, -1.0, 1.0)))

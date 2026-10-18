@@ -1,0 +1,46 @@
+#!/bin/bash
+#PBS -N nested
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=8:ngpus=1
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/nested.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/nested.err
+# Retrieval-free SE(3) Hopf estimation: nested bin classification (src_v2/nested_se3.py) and the matched
+# no-reference regression baseline (src_v2/hopf_se3.py --no_ref), same inits, resolutions and step budgets.
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+C=$ROOT/checkpoints
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
+N="$PY src_v2/nested_se3.py"; H="$PY src_v2/hopf_se3.py"; CFG="--config configs/isro_hpc.yaml"
+SH=$C/hopf_se3_fixed          # SPACE-HOP 224 level-0 predictions (val/test)
+MON=$C/cascades/coarse_long   # coarse-refined val poses: only used to monitor the 448 px stages during training
+set -x
+echo "=== $(date) job $PBS_JOBID on $(hostname)"
+mkdir -p $C/nested224 $C/nested448 $C/noref_coarse $C/noref_fine448 $C/nested_eval
+# phase 1 (224 px, concurrently)
+$N train $CFG --out $C/nested224 --img_size 224 --levels 0 1 2 3 --init $C/hopf_coarse_long/last.pth --init_dir $SH \
+    --epochs 30 --lr 5e-5 --num_workers 3 --monitor 0,0,1,2,3 > $C/nested224/train.log 2>&1 &
+$H train $CFG --out $C/noref_coarse --no_ref --init $C/hopf_coarse_long/last.pth --init_dir $SH --img_size 224 \
+    --bs 16 --epochs 30 --lr 5e-5 --min_scale 1.0 --probe_scale 1.0 --probe_every 1000 --num_workers 3 \
+    > $C/noref_coarse/train.log 2>&1 &
+wait
+# phase 2 (448 px, concurrently)
+$N train $CFG --out $C/nested448 --img_size 448 --levels 2 3 4 --init $C/nested224/last.pth --init_dir $MON \
+    --epochs 20 --lr 5e-5 --num_workers 3 --monitor 2,3,4 > $C/nested448/train.log 2>&1 &
+$H train $CFG --out $C/noref_fine448 --no_ref --init $C/hopf_fine448/last.pth --init_dir $MON --img_size 448 \
+    --bs 16 --epochs 20 --lr 5e-5 --min_scale 1.0 --probe_scale 1.0 --rot_deg 0.5 --lat 0.003 --depth 0.002 \
+    --probe_every 1000 --num_workers 3 > $C/noref_fine448/train.log 2>&1 &
+wait
+# phase 3: full val + test from SPACE-HOP 224, no retrieval anywhere
+for split in val test; do
+  $N eval $CFG --split $split --init_dir $SH --out $C/nested_eval/n224 \
+      --schedule $C/nested224/last.pth:0,0,1,2,3 >> $C/nested_eval/n224.log 2>&1
+  $N eval $CFG --split $split --init_dir $SH --out $C/nested_eval/n224_n448 \
+      --schedule $C/nested224/last.pth:0,0,1,2 $C/nested448/last.pth:2,3,4 >> $C/nested_eval/n224_n448.log 2>&1
+  $H eval $CFG --split $split --n_eval 5000 --k_refs 1 --init_dir $SH --out $C/nested_eval/noref \
+      --stages $C/noref_coarse/last.pth:3 $C/noref_fine448/last.pth:2 >> $C/nested_eval/noref.log 2>&1
+done
+echo "=== $(date) NESTED_DONE"

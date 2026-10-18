@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import torch
 
-def draw_satellite_wireframe(img_tensor, R_gt, T_gt, R_pred, T_pred, K, bbox):
+def draw_satellite_wireframe(img_tensor, R_gt, T_gt, R_pred, T_pred, K, bbox, corners_3d=None):
     """
     Draws a 3D wireframe box for Ground Truth (Green) and Prediction (Red)
     overlapping on the same image crop.
@@ -18,12 +18,13 @@ def draw_satellite_wireframe(img_tensor, R_gt, T_gt, R_pred, T_pred, K, bbox):
     img = (img * 255).astype(np.uint8)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR).copy()
 
-    # 2. Define a generic 3D bounding box for the Tango satellite (approx bounds in meters)
-    l, w, h = 0.35, 0.35, 0.45 
-    corners_3d = np.array([
-        [-l, -w, -h], [ l, -w, -h], [ l,  w, -h], [-l,  w, -h],
-        [-l, -w,  h], [ l, -w,  h], [ l,  w,  h], [-l,  w,  h]
-    ], dtype=np.float32)
+    # 2. 3D bounding box of the spacecraft (8 corners, body frame, metres); defaults to Tango's approx bounds
+    if corners_3d is None:
+        l, w, h = 0.35, 0.35, 0.45 
+        corners_3d = np.array([
+            [-l, -w, -h], [ l, -w, -h], [ l,  w, -h], [-l,  w, -h],
+            [-l, -w,  h], [ l, -w,  h], [ l,  w,  h], [-l,  w,  h]
+        ], dtype=np.float32)
 
     edges = [
         (0, 1), (1, 2), (2, 3), (3, 0), # Bottom face
@@ -45,8 +46,7 @@ def draw_satellite_wireframe(img_tensor, R_gt, T_gt, R_pred, T_pred, K, bbox):
         
         # Adjust for the bounding box crop
         bbox_np = bbox.detach().cpu().numpy()
-        x1, y1, x2, y2 = bbox_np
-        w_box, h_box = (x2 - x1), (y2 - y1)
+        x1, y1, w_box, h_box = bbox_np  # crop_params = (x1, y1, w, h)
         _, H_img, W_img = img_tensor.shape
         
         pts_2d[:, 0] = (pts_2d[:, 0] - x1) * (W_img / w_box)

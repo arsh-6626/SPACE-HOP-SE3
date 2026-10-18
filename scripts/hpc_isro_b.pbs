@@ -1,0 +1,22 @@
+#!/bin/bash
+#PBS -N isro_b
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=6:ngpus=1
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/isro_b.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/isro_b.err
+# One GPU: SPACE-HOP 448 px with DINOv3 ViT-B/16 backbone (resume), then eval on val + test.
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+HOPF=$ROOT/checkpoints/hopf_se3_fixed
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+echo "=== $(date) job $PBS_JOBID on $(hostname) CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv
+
+$PY src/train.py --config configs/isro_448_dinov3_hpc.yaml >> checkpoints/pose_isro_448_dinov3/train_hpc.log 2>&1
+$PY src/val.py --config configs/isro_448_dinov3_hpc.yaml --checkpoint checkpoints/pose_isro_448_dinov3/best_model.pth \
+    --splits val test >> checkpoints/pose_isro_448_dinov3/eval_hpc.log 2>&1
+echo "=== $(date) ISRO_B_DONE"

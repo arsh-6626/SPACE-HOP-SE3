@@ -1,174 +1,67 @@
-import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+"""
+Evaluate a trained SPACE-HOP pose model on the ISRO GSAT-12R val fold and/or held-out test set.
+
+    python src/val.py --config configs/isro.yaml --checkpoint checkpoints/pose_isro/best_model.pth --splits val test
+
+Reports E_T (m), E_T/|t|, geodesic E_R (deg) and the SPEED-style score E_T/|t| + E_R[rad].
+Crops are derived from ground-truth landmark projections (oracle detection), as in training.
+"""
+import argparse
+import json
 import os
-import numpy as np
 
-from dataloader import SpeedDataset
+import torch
+from torch.utils.data import DataLoader
+
+from train import build_dataset, box_corners, load_config, validate
 from model import FastPoseViT
-from geometry_utils import (
-    recover_true_rotation,
-    recover_translation_components,
-    axis_angle_to_matrix
-)
-from hopf_grid import get_closest_anchor
 
-
-# -----------------------------
-# --- Utility Functions
-# -----------------------------
-
-def rotmat2quat(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    r00, r11, r22 = R[..., 0, 0], R[..., 1, 1], R[..., 2, 2]
-    trace = r00 + r11 + r22
-    q = torch.zeros((*R.shape[:-2], 4), device=R.device, dtype=R.dtype)
-
-    mask = trace > 0
-    s = torch.sqrt(trace[mask] + 1.0) * 2.0
-    q[mask, 0] = 0.25 * s
-    q[mask, 1] = (R[mask, 2, 1] - R[mask, 1, 2]) / s
-    q[mask, 2] = (R[mask, 0, 2] - R[mask, 2, 0]) / s
-    q[mask, 3] = (R[mask, 1, 0] - R[mask, 0, 1]) / s
-
-    q = q / (q.norm(dim=-1, keepdim=True) + eps)
-    return q
-
-
-def translation_error_euclidian(T_pred, T_gt):
-    return torch.norm(T_pred - T_gt, dim=1)
-
-
-def rotation_error_geodesic(R_pred, R_gt):
-    q_pred = rotmat2quat(R_pred)
-    q_gt = rotmat2quat(R_gt)
-    dot = torch.abs(torch.sum(q_pred * q_gt, dim=1))
-    dot = torch.clamp(dot, -1.0, 1.0)
-    E_r = 2 * torch.acos(dot)
-    return torch.rad2deg(E_r)
-
-
-# -----------------------------
-# --- Validation Function
-# -----------------------------
-
-@torch.no_grad()
-def validate(model, loader, device, intrinsics):
-
-    model.eval()
-
-    total_t_error = []
-    total_r_error = []
-
-    fx, fy, cx, cy = intrinsics
-    K_batch = torch.eye(3, device=device).unsqueeze(0)
-    K_batch[0, 0, 0] = float(fx)
-    K_batch[0, 1, 1] = float(fy)
-    K_batch[0, 0, 2] = float(cx)
-    K_batch[0, 1, 2] = float(cy)
-
-    for batch in tqdm(loader, desc="Validation"):
-
-        images = batch["pixel_values"].to(device)
-        R_apparent_gt = batch["R_apparent_gt"].to(device)
-        T_gt = batch["T_gt"].to(device)
-        R_gt_true = batch["R_gt_true"].to(device)
-        crop_params = batch["crop_params"].to(device)
-
-        outputs = model(images)
-
-        U_pred = outputs["U"]
-        logits = outputs["logits"]
-        deltas = outputs["deltas"]
-        anchors = outputs["anchors"]
-
-        # -------- Argmax inference --------
-        winning_bins = torch.argmax(logits, dim=-1)
-        batch_indices = torch.arange(images.shape[0], device=device)
-
-        R_base = anchors[winning_bins]
-        delta_win = deltas[batch_indices, winning_bins, :]
-        R_delta = axis_angle_to_matrix(delta_win)
-        R_apparent_pred = torch.bmm(R_base, R_delta)
-
-        # -------- Recover true pose --------
-        T_pred = recover_translation_components(
-            U_pred, crop_params, (1920, 1200), (224, 224), K_batch
-        )
-
-        R_pred_true = recover_true_rotation(R_apparent_pred, T_pred)
-
-        # -------- Errors --------
-        t_err = translation_error_euclidian(T_pred, T_gt)
-        r_err = rotation_error_geodesic(R_pred_true, R_gt_true)
-
-        total_t_error.append(t_err.cpu())
-        total_r_error.append(r_err.cpu())
-
-    total_t_error = torch.cat(total_t_error)
-    total_r_error = torch.cat(total_r_error)
-
-    print("\n===== FINAL METRICS =====")
-    print(f"Translation Error (mean): {total_t_error.mean():.4f} m")
-    print(f"Rotation Error (mean):    {total_r_error.mean():.4f} deg")
-    print(f"Median T Error:           {total_t_error.median():.4f} m")
-    print(f"Median R Error:           {total_r_error.median():.4f} deg")
-
-    return total_t_error.mean().item(), total_r_error.mean().item()
-
-
-# -----------------------------
-# --- Main
-# -----------------------------
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--config', required=True)
+    ap.add_argument('--checkpoint', required=True)
+    ap.add_argument('--splits', nargs='+', default=['val', 'test'])
+    ap.add_argument('--batch_size', type=int, default=64)
+    ap.add_argument('--out', default=None, help='output dir (default: next to the checkpoint)')
+    ap.add_argument('--vis', action='store_true', help='save wireframe overlays for the first batch')
+    args = ap.parse_args()
 
-    config = {
-        "val_csv": "/home/aac/shared/teams/dtu/mlr-lab/speedplusv2/synthetic/validation.csv",
-        "img_folder": "~/speed/",
-        "intrinsic_file": "/mnt/external_ssd/ARSH_ARNABI/speedplusv2/camera.json",
-        "keypoints_file": "/mnt/external_ssd/ARSH_ARNABI/speedplusv2/tangoPoints.mat",
-        "checkpoint": "./checkpoints_SEPIA/best_model.pth",
-        "jepa_weights": "/mnt/external_ssd/ARSH_ARNABI/jepa_joints_speedplus-ep300.pth.tar",
-        "batch_size": 8,
-    }
-
+    cfg = load_config(args.config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    out_dir = args.out or os.path.join(os.path.dirname(os.path.abspath(args.checkpoint)), 'eval')
+    os.makedirs(out_dir, exist_ok=True)
 
-    dataset = SpeedDataset(
-        csv_file=config["val_csv"],
-        image_root=config["img_folder"],
-        intrinsics_file=config["intrinsic_file"],
-        keypoints_file=config["keypoints_file"],
-        mode="val"
-    )
-
-    loader = DataLoader(dataset,
-                        batch_size=config["batch_size"],
-                        shuffle=False,
-                        num_workers=4,
-                        pin_memory=True)
-
-    # --- Intrinsics ---
-    if hasattr(dataset, 'intrinsics_mat'):
-        K = dataset.intrinsics_mat
-        intrinsics = (K[0,0], K[1,1], K[0,2], K[1,2])
-    else:
-        K = dataset.intrinsics
-        if torch.is_tensor(K):
-            K = K.numpy()
-        intrinsics = (K[0,0], K[1,1], K[0,2], K[1,2])
-
-    # --- Model ---
-    model = FastPoseViT(
-        jepa_path=config["jepa_weights"],
-        img_size=224,
-        patch_size=16
-    )
-
-    checkpoint = torch.load(config["checkpoint"], map_location=device)
+    # Backbone weights come from the checkpoint, so the JEPA init is not needed here.
+    model = FastPoseViT(jepa_path=None, img_size=cfg['data'].get('crop_size', 224), patch_size=16,
+                        backbone=cfg['model'].get('backbone', 'jepa'), grad_ckpt=cfg['model'].get('grad_ckpt', False))
+    checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
+    epoch = checkpoint['epoch'] + 1
+    print(f"Loaded checkpoint from epoch {epoch}")
 
-    print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
-    validate(model, loader, device, intrinsics)
+    results = {}
+    for split in args.splits:
+        dataset = build_dataset(cfg, split, train=False)
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=cfg['data'].get('num_workers', 8), pin_memory=True)
+        metrics, (idx, t_err, r_err) = validate(
+            model, loader, device, dataset.K, tuple(dataset.full_size), epoch, name=split,
+            vis_dir=os.path.join(out_dir, 'vis') if args.vis else None,
+            corners_3d=box_corners(dataset.points_3d), amp=cfg['training'].get('amp_bf16', True),
+            return_per_sample=True)
+        results[split] = metrics
+        with open(os.path.join(out_dir, f'{split}_per_image.csv'), 'w') as f:
+            f.write('filename,E_T_m,E_R_deg\n')
+            for i, te, re in zip(idx.tolist(), t_err.tolist(), r_err.tolist()):
+                f.write(f'{dataset.filename(i)},{te:.6f},{re:.6f}\n')
+
+    print("\n===== FINAL METRICS =====")
+    for split, m in results.items():
+        print(f"{split:5s} (n={m['n']}): E_T mean {m['E_T_mean_m']:.4f} m | median {m['E_T_median_m']:.4f} m | "
+              f"E_T/|t| {m['E_T_norm_mean']:.4f} | E_R mean {m['E_R_mean_deg']:.3f} deg | "
+              f"median {m['E_R_median_deg']:.3f} deg | <5deg {m['acc_R_5deg']:.3f} | score {m['score_mean']:.4f}")
+    with open(os.path.join(out_dir, 'metrics.json'), 'w') as f:
+        json.dump({'checkpoint': os.path.abspath(args.checkpoint), 'epoch': epoch, **results}, f, indent=2)
+    print(f"wrote {out_dir}/metrics.json")

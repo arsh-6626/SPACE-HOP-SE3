@@ -23,6 +23,7 @@ def make_transforms(
     horizontal_flip=False,
     color_distortion=False,
     gaussian_blur=False,
+    random_resized_crop=True,
     normalization=((0.485, 0.456, 0.406),
                    (0.229, 0.224, 0.225))
 ):
@@ -39,7 +40,8 @@ def make_transforms(
         return color_distort
 
     transform_list = []
-    transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
+    if random_resized_crop:
+        transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
     if horizontal_flip:
         transform_list += [transforms.RandomHorizontalFlip()]
     if color_distortion:
@@ -63,5 +65,5 @@ class GaussianBlur(object):
         if torch.bernoulli(torch.tensor(self.prob)) == 0:
             return img
 
-        radius = self.radius_min + torch.rand(1) * (self.radius_max - self.radius_min)
+        radius = self.radius_min + torch.rand(1).item() * (self.radius_max - self.radius_min)
         return img.filter(ImageFilter.GaussianBlur(radius=radius))

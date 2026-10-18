@@ -1,0 +1,36 @@
+#!/bin/bash
+#PBS -N hop_coarse
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=4:ngpus=1
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/hop_coarse.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/hop_coarse.err
+# Item 4: DINOv3-448 level-0 cache. Item 1: coarse refiner trained longer. Item 2 (224 px): fine refiner on top.
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+C=$ROOT/checkpoints
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
+H="$PY src/hopf_se3.py"
+CFG="--config configs/isro_hpc.yaml"
+FINE="--min_scale 1.0 --probe_scale 1.0 --rot_deg 0.5 --lat 0.003 --depth 0.002"
+set -x
+echo "=== $(date) job $PBS_JOBID on $(hostname)"
+
+$PY src/hopf_se3.py dump --config configs/isro_448_dinov3_hpc.yaml --spacehop_ckpt $C/pose_isro_448_dinov3/best_model.pth \
+    --out $C/init_dinov3_448 > $C/init_dinov3_448.log 2>&1
+# 1. coarse, 30 more epochs from the finished 15-epoch run, fresh schedule at half the LR
+mkdir -p $C/hopf_coarse_long
+$H train $CFG --out $C/hopf_coarse_long --init_dir $C/hopf_se3_fixed --init $C/hopf_se3_fixed/last.pth --img_size 224 \
+    --bs 16 --epochs 30 --lr 5e-5 --min_scale 1.0 --probe_scale 1.0 --probe_every 1000 --num_workers 3 \
+    > $C/hopf_coarse_long/train.log 2>&1
+# its refined val poses: the starting point the fine stage is monitored from
+$H eval $CFG --split val --n_eval 5000 --k_refs 4 --init_dir $C/hopf_se3_fixed --out $C/hopf_coarse_long/stage1 \
+    --stages $C/hopf_coarse_long/last.pth:4 > $C/hopf_coarse_long/stage1.log 2>&1
+# 2. fine refiner at 224 px: 0.5 deg / 8 mm / 0.2 % noise, initialised from the long coarse refiner
+mkdir -p $C/hopf_fine224
+$H train $CFG --out $C/hopf_fine224 --init_dir $C/hopf_coarse_long/stage1 --init $C/hopf_coarse_long/last.pth --img_size 224 \
+    --bs 16 --epochs 20 --lr 5e-5 $FINE --probe_every 1000 --num_workers 3 > $C/hopf_fine224/train.log 2>&1
+echo "=== $(date) HOP_COARSE_DONE"

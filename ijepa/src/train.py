@@ -85,6 +85,9 @@ def main(args, resume_preempt=False):
     # -- LOGGING
     folder = args['logging']['folder']
     tag = args['logging']['write_tag']
+    global checkpoint_freq
+    checkpoint_freq = args['logging'].get('checkpoint_freq', checkpoint_freq)
+    max_itrs_per_epoch = args['meta'].get('max_itrs_per_epoch')  # debug/timing only
     os.makedirs(folder, exist_ok=True)
 
     world_size, rank = init_distributed()
@@ -113,8 +116,19 @@ def main(args, resume_preempt=False):
         crop_size=crop_size, crop_scale=crop_scale,
         gaussian_blur=args['data']['use_gaussian_blur'],
         horizontal_flip=args['data']['use_horizontal_flip'],
-        color_distortion=args['data']['use_color_distortion'],)
-    if dataset_name == 'speedplus':
+        color_distortion=args['data']['use_color_distortion'],
+        color_jitter=args['data'].get('color_jitter_strength', 1.0),
+        # keypoint-guided masks are computed on the already-cropped image, so no geometric crop for isro
+        random_resized_crop=(dataset_name != 'isro'),)
+    if dataset_name == 'isro':
+        from src.datasets.isro import make_isro
+        _, unsupervised_loader, unsupervised_sampler = make_isro(
+                root=args['data']['root_path'], camera_file=args['data']['camera_file'],
+                split='train', fold=args['data'].get('fold', 1), transform=transform,
+                batch_size=batch_size, collator=mask_collator, pin_mem=pin_mem,
+                training=True, num_workers=num_workers, world_size=world_size,
+                rank=rank, crop_size=crop_size)
+    elif dataset_name == 'speedplus':
         from src.datasets.speedplus import make_speedplus
         _, unsupervised_loader, unsupervised_sampler = make_speedplus(
                 csv_file=root_path, image_root=image_folder, transform=transform,
@@ -168,6 +182,8 @@ def main(args, resume_preempt=False):
             # 1. Load Data
 # Inside your training loop
         for itr, (imgs, masks_enc, masks_pred, metadata) in pbar:
+            if max_itrs_per_epoch and itr >= max_itrs_per_epoch:
+                break
             
             # 1. Move to device
             imgs = imgs.to(device, non_blocking=True)

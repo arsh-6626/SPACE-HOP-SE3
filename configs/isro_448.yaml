@@ -1,0 +1,29 @@
+# SPACE-HOP pose stage on the ISRO GSAT-12R dataset. Relative paths resolve against the repo root.
+data:
+  root: /home/kavinder/ISROGSAT12RDataset
+  camera_file: configs/isro_camera.json   # produced by src/tools/calibrate_isro.py
+  fold: 1                                  # cv_splits4 fold used for train/val; test = images/test
+  crop_size: 448
+  crop_scale: 1.6                          # square crop side / projected-landmark extent
+  scale_jitter: [0.9, 1.25]                # train-only
+  shift_jitter: 0.1                        # train-only, fraction of crop side
+  color_aug: true
+  num_workers: 10
+
+model:
+  jepa_path: checkpoints/jepa_isro/jepa_isro-latest.pth.tar   # stage-1 output; null = random init
+
+training:
+  epochs: 70            # warm restarts T0=10,Tmult=2 reach an LR minimum at 10, 30, 70, 150
+  batch_size: 32
+  lr: 1e-4
+  lr_min: 1e-6
+  amp_bf16: true
+  seed: 0
+  save_dir: checkpoints/pose_isro_448
+  resume: null
+  vis_every: 10
+
+logging:
+  wandb: false
+  project: SPACE-HOP-ISRO

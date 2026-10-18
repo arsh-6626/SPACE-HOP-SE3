@@ -1,0 +1,52 @@
+#!/bin/bash
+#PBS -N nested3
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=14:ngpus=2
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/nested3.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/nested3.err
+# Retrieval-free nested SE(3), code snapshot src_v4.
+# GPU A  finer levels for the separate refiner, both runs from nested2_224 (test 0.163 deg / 4.6 mm):
+#          nested3_224: levels 0-2 at 224 px     nested3_448: levels 0-3 at 448 px
+# GPU B  the nested refiner built into SPACE-HOP (src/spacehop_nested.py: one shared ViT, pass 0 + nested passes):
+#          shn_a: init from nested2_224 (+ SPACE-HOP pass-0 heads)     shn_a01: same, pass-0 gradient into the ViT x0.1
+#          shn_b: init from SPACE-HOP (fresh nested head)
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+C=$ROOT/checkpoints
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
+N="$PY src_v4/nested_se3.py"; S="$PY src_v4/spacehop_nested.py"; CFG="--config configs/isro_hpc.yaml"
+SH=$C/hopf_se3_fixed; N2=$C/nested2_224/last.pth; HOP=$C/pose_isro/best_model_weights.pth
+GPUS=(${CUDA_VISIBLE_DEVICES//,/ }); GA=${GPUS[0]}; GB=${GPUS[1]:-${GPUS[0]}}
+set -x
+echo "=== $(date) job $PBS_JOBID on $(hostname) GPUs $CUDA_VISIBLE_DEVICES"
+mkdir -p $C/nested3_224 $C/nested3_448 $C/nested3_eval $C/shn_a $C/shn_a01 $C/shn_b $C/shn_eval
+( CUDA_VISIBLE_DEVICES=$GA $N train $CFG --out $C/nested3_224 --img_size 224 --levels 0 1 2 --init $N2 --init_dir $SH \
+      --epochs 15 --lr 3e-5 --num_workers 3 --monitor 0,0,1,2 > $C/nested3_224/train.log 2>&1 &
+  CUDA_VISIBLE_DEVICES=$GA $N train $CFG --out $C/nested3_448 --img_size 448 --levels 0 1 2 3 --init $N2 --init_dir $SH \
+      --epochs 20 --lr 3e-5 --num_workers 3 --monitor 0,0,1,2,3 > $C/nested3_448/train.log 2>&1 &
+  wait
+  for split in val test; do
+    CUDA_VISIBLE_DEVICES=$GA $N eval $CFG --split $split --init_dir $SH --out $C/nested3_eval/a224 \
+        --schedule $C/nested3_224/last.pth:0,0,1,2,2 >> $C/nested3_eval/a224.log 2>&1
+    CUDA_VISIBLE_DEVICES=$GA $N eval $CFG --split $split --init_dir $SH --out $C/nested3_eval/b448 \
+        --schedule $C/nested3_448/last.pth:0,0,1,2,3 >> $C/nested3_eval/b448.log 2>&1
+    CUDA_VISIBLE_DEVICES=$GA $N eval $CFG --split $split --init_dir $SH --out $C/nested3_eval/a224_b448 \
+        --schedule $C/nested3_224/last.pth:0,0,1,2 $C/nested3_448/last.pth:2,3,3 >> $C/nested3_eval/a224_b448.log 2>&1
+  done ) &
+( CUDA_VISIBLE_DEVICES=$GB $S train $CFG --out $C/shn_a --init nested --nested_ckpt $N2 --spacehop_ckpt $HOP \
+      --levels 0 1 --epochs 15 --num_workers 3 > $C/shn_a/train.log 2>&1 &
+  CUDA_VISIBLE_DEVICES=$GB $S train $CFG --out $C/shn_a01 --init nested --nested_ckpt $N2 --spacehop_ckpt $HOP \
+      --levels 0 1 --epochs 15 --num_workers 2 --pass0_grad 0.1 > $C/shn_a01/train.log 2>&1 &
+  CUDA_VISIBLE_DEVICES=$GB $S train $CFG --out $C/shn_b --init spacehop --spacehop_ckpt $HOP \
+      --levels 0 1 --epochs 15 --num_workers 2 > $C/shn_b/train.log 2>&1 &
+  wait
+  for r in shn_a shn_a01 shn_b; do for split in val test; do
+    CUDA_VISIBLE_DEVICES=$GB $S eval $CFG --ckpt $C/$r/last.pth --split $split --schedule 0,0,1 --num_workers 4 \
+        --out $C/shn_eval/$r >> $C/shn_eval/$r.log 2>&1
+  done; done ) &
+wait
+echo "=== $(date) NESTED3_DONE"

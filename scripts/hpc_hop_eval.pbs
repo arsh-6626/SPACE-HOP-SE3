@@ -1,0 +1,36 @@
+#!/bin/bash
+#PBS -N hop_eval
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=6:ngpus=1
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/hop_eval.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/hop_eval.err
+# All cascades on val + test (runs after hop_coarse and hop_fine448).
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+C=$ROOT/checkpoints
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
+H="$PY src/hopf_se3.py"
+CFG="--config configs/isro_hpc.yaml"
+FINE="--min_scale 1.0 --probe_scale 1.0 --rot_deg 0.5 --lat 0.003 --depth 0.002"
+set -x
+echo "=== $(date) job $PBS_JOBID on $(hostname)"
+
+CL=$C/hopf_coarse_long/last.pth; F2=$C/hopf_fine224/last.pth; F4=$C/hopf_fine448/last.pth; CF=$C/hopf_se3_fixed/last.pth
+run() {  # name init_dir stages...
+  n=$1; d=$2; shift 2
+  for split in val test; do
+    $H eval $CFG --split $split --n_eval 5000 --k_refs 1 4 --init_dir $d --out $C/cascades/$n --stages "$@" \
+        >> $C/cascades/$n.log 2>&1
+  done
+}
+mkdir -p $C/cascades
+run coarse_long        $C/hopf_se3_fixed  $CL:4
+run coarse_long+fine448 $C/hopf_se3_fixed $CL:3 $F4:3:448
+run coarse+fine448     $C/hopf_se3_fixed  $CF:3 $F4:3:448
+run coarse_long+fine224 $C/hopf_se3_fixed $CL:3 $F2:3
+run dino448_init+coarse_long+fine448 $C/init_dinov3_448 $CL:3 $F4:3:448
+echo "=== $(date) HOP_EVAL_DONE"

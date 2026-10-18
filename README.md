@@ -70,6 +70,19 @@ Reports translation error `E_T` and geodesic rotation error `E_R` across the Syn
 
 **5. Symmetry diagnostics.** `src/helper/jensen_audit.py` rotates each input through `K` in-plane rotations, canonicalizes the predictions, and reports the Jensen Gain — a measure of orientation-dependent instability useful for diagnosing axial-symmetry failure modes.
 
+## ISRO GSAT-12R dataset
+
+The dataset ships 2D landmarks and poses but no camera matrix or 3D keypoints. `src/tools/calibrate_isro.py` recovers both by triangulating the landmarks across views (median reprojection error < 0.01 px) and writes `configs/isro_camera.json`: `fx = fy ≈ 938.7`, `(cx, cy) = (960, 600)`, quaternions are `(w, x, y, z)` with `X_cam = R·X_body + t`.
+
+```bash
+python src/tools/calibrate_isro.py --root /path/to/ISROGSAT12RDataset --out configs/isro_camera.json   # already committed
+PYTHON=python bash scripts/run_isro.sh   # JEPA pretraining -> pose training -> val/test eval
+```
+
+- Pretraining (`ijepa/configs/isro_vitb16.yaml`) and pose training (`configs/isro.yaml`) use only the train split of `cv_splits4` fold 1. Model selection uses the fold-1 val split. `images/test` is evaluated once at the end.
+- Crops are squares centred on the projected landmarks, with side 1.6× their extent. They are derived from ground truth (oracle detection), as in the SPEED+ protocol. Train-time jitter is relative to the crop size.
+- `src/val.py` reports E_T (m), E_T/|t|, geodesic E_R (°) and E_T/|t| + E_R[rad]. It also writes per-image errors.
+
 ## Citation
 
 ```bibtex

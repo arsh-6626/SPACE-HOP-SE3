@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -N isro_a
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=5:ngpus=1
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/isro_a.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/isro_a.err
+# One GPU, CPU-starved cluster: SPACE-HOP 448 px JEPA (resume) + SE(3) Hopf-fibration refiner (resume, then eval).
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+HOPF=$ROOT/checkpoints/hopf_se3_fixed
+cd $ROOT
+export XDG_CACHE_HOME=$ROOT/cache HF_HOME=$ROOT/cache/huggingface HF_HUB_OFFLINE=1 \
+       OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+echo "=== $(date) job $PBS_JOBID on $(hostname) CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv
+
+$PY src/train.py --config configs/isro_448_hpc.yaml >> checkpoints/pose_isro_448/train_hpc.log 2>&1 &
+P1=$!
+( $PY src/hopf_se3.py train --config configs/isro_hpc.yaml --out $HOPF --img_size 224 \
+      --bs 16 --epochs 15 --min_scale 1.0 --probe_scale 1.0 --probe_every 500 --num_workers 1 \
+      --resume $HOPF/last.pth >> $HOPF/train_hpc.log 2>&1
+  for split in val test; do
+    $PY src/hopf_se3.py eval --config configs/isro_hpc.yaml --ckpt $HOPF/last.pth \
+        --img_size 224 --split $split --n_eval 5000 --iters 4 --k_refs 1 4 >> $HOPF/eval_hpc.log 2>&1
+  done ) &
+wait $P1; echo "$(date) jepa448 exited $?"
+$PY src/val.py --config configs/isro_448_hpc.yaml --checkpoint checkpoints/pose_isro_448/best_model.pth \
+    --splits val test >> checkpoints/pose_isro_448/eval_hpc.log 2>&1
+wait
+echo "=== $(date) ISRO_A_DONE"
