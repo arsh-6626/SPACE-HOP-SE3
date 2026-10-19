@@ -36,16 +36,21 @@ def n_cells(level):
 
 # ---------------------------------------------------------------- grid <-> rotation (Hopf map)
 
-def cells_to_matrices(level):
-    """All N(level) cell-centre rotations as (N, 3, 3). Cell c = pix * n_roll + roll (pix in NESTED HEALPix)."""
+def cell_index_to_matrix(cells, level):
+    """Cell-centre rotation(s) for given flat index/indices at `level` -> (..., 3, 3). Direct (no full enumeration)."""
+    cells = np.asarray(cells, np.int64)
     nside, nr = nside_of(level), n_roll(level)
-    npix = hp.nside2npix(nside)
-    pix = np.repeat(np.arange(npix), nr)
-    roll = np.tile(np.arange(nr), npix)
+    pix, roll = np.divmod(cells.reshape(-1), nr)
     theta, phi = hp.pix2ang(nside, pix, nest=True)      # colatitude, azimuth of the base point
     psi = (roll + 0.5) * (2 * np.pi / nr)
     # Hopf lift: base point = Rz(phi) Ry(theta) applied to z; fibre = Rz(psi). ZYZ Euler (phi, theta, psi).
-    return R.from_euler('ZYZ', np.stack([phi, theta, psi], 1)).as_matrix()
+    mats = R.from_euler('ZYZ', np.stack([phi, theta, psi], 1)).as_matrix()
+    return mats.reshape(*cells.shape, 3, 3)
+
+
+def cells_to_matrices(level):
+    """All N(level) cell-centre rotations as (N, 3, 3). Cell c = pix * n_roll + roll (pix in NESTED HEALPix)."""
+    return cell_index_to_matrix(np.arange(n_cells(level)), level)
 
 
 def rotations_to_cells(mats, level):
@@ -91,6 +96,42 @@ def paths_batch(mats, level):
         cell0[i] = c0
         children[i] = ch
     return cell0, children
+
+
+def path_node_cells(cell0, children):
+    """Flat cell of every node along a path: length len(children)+1, levels 0..L. Node l's children are scored to
+    pick children[l]. The last entry is the finest cell. Inverse-compose of cell_to_path."""
+    nodes = [int(cell0)]
+    pix, roll = divmod(int(cell0), n_roll(0))
+    for l, c in enumerate(children):
+        pix = pix * 4 + c // 2
+        roll = roll * 2 + c % 2
+        nodes.append(pix * n_roll(l + 1) + roll)
+    return np.array(nodes, np.int64)
+
+
+def parent_to_children_cells(parent_cells, parent_level):
+    """(M,) flat cells at parent_level -> (M, 8) flat child cells at parent_level+1 (child c: s2 c//2, roll c%2)."""
+    parent_cells = np.asarray(parent_cells, np.int64)
+    nr_p, nr_c = n_roll(parent_level), n_roll(parent_level + 1)
+    pix, roll = np.divmod(parent_cells, nr_p)
+    c = np.arange(8)
+    child_pix = pix[:, None] * 4 + (c // 2)[None, :]
+    child_roll = roll[:, None] * 2 + (c % 2)[None, :]
+    return child_pix * nr_c + child_roll
+
+
+def cell_size_rad(level):
+    """Characteristic linear size of a cell at `level`, in radians: (V_SO3 / N)^(1/3). For offset normalisation."""
+    return (V_SO3 / n_cells(level)) ** (1.0 / 3.0)
+
+
+def ceiling_loglik(equiv_mats, level):
+    """Best achievable avg log-lik for a target uniform over the occupied finest cells of an equivalent set.
+    equiv_mats (K,3,3) -> log(N / (n_occupied * V_SO3)). The symmetry ceiling for a shape at this level."""
+    cells = rotations_to_cells(equiv_mats, level)
+    n_occ = len(np.unique(cells))
+    return float(np.log(n_cells(level) / (n_occ * V_SO3)))
 
 
 # ---------------------------------------------------------------- log-likelihood from a distribution
