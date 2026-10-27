@@ -1,0 +1,105 @@
+\section{Introduction}
+\label{sec:intro}
+
+Recovering the 6-DoF pose of an object---its orientation in $\SOthree$ and its
+position in $\mathbb{R}^3$, jointly an element of $\SEthree$---from a single image
+is a core problem in computer vision and robotics. In many settings the pose is not
+uniquely determined by the image. A textureless cube looks identical under its $24$
+rotational symmetries and a cylinder under a continuous one-parameter family; depth
+is ambiguous under perspective; and self-occlusion or a missing distinguishing
+feature can make otherwise distinct poses indistinguishable. A method that returns a
+single pose discards this structure; a method that returns a \emph{distribution}
+over the pose group preserves it, and lets downstream consumers---grasp planners,
+trackers, sensor-fusion pipelines---reason about the ambiguity
+explicitly~\cite{murphy2021ipdf,haugaard2023spyropose}. The difficulty is
+\emph{normalization}: a usable distribution must integrate to one over the group,
+and for the expressive non-parametric models this is exactly the expensive part,
+on $\SOthree$ and more so on $\SEthree$.
+
+The most expressive way to represent such a distribution is non-parametrically.
+Implicit-PDF (IPDF)~\cite{murphy2021ipdf} does so with an implicit function: a
+network maps an image embedding and a candidate rotation to an unnormalized
+score, and the distribution is recovered by normalizing these scores over an
+equivolumetric grid of $\SOthree$. This is maximally flexible and trains from a
+single ground-truth rotation per image, but it inherits two costs from the grid.
+First, obtaining a \emph{normalized} density requires evaluating the network at
+every grid point---roughly $2.4$M rotations at the resolution used for
+evaluation---so a faithful distribution is expensive and its fidelity is capped
+by the grid spacing. Second, during training the normalizer is only
+\emph{approximated}, by querying a random or uniform coverage of $\SOthree$
+together with the ground truth. SpyroPose~\cite{haugaard2023spyropose} makes the
+grid hierarchical and replaces the uniform coverage with importance sampling,
+reducing the number of evaluations by orders of magnitude and extending the idea
+to $\SEthree$; it trains an energy per resolution with a contrastive objective
+whose partition function is an importance-sampling estimate, and at inference
+expands the top-$k$ cells level by level and renormalizes their children. Its
+inference distribution is properly normalized, but it is obtained by a
+multi-query sparse search and its fine-level density depends on the expansion
+width $k$.
+
+\paragraph{Our approach.}
+We ask whether the normalizer can be removed from the problem entirely rather
+than approximated more cheaply. Our observation is simple: the same
+Hopf--HEALPix construction that IPDF and SpyroPose use for its equivolumetric
+property is also \emph{strictly hierarchical}---doubling the grid resolution
+splits every cell into exactly eight disjoint children, forming a tree. On a
+tree, a normalized distribution over the leaves can be written as a product of
+per-node categoricals (a tree-structured softmax~\cite{morin2005hierarchical}): a categorical over
+the $72$ cells at the coarsest level, and at every node a categorical over its
+$8$ children. Because each factor is a softmax, the product is an exactly
+normalized probability \emph{by construction}---at every resolution, with no grid
+evaluation and no sampled partition function. The density at a rotation $R$ is
+\begin{equation}
+  p(R) \;=\; P\big(\text{finest cell of } R\big)\cdot \frac{N}{\Vso},
+\end{equation}
+and $\log P(\text{cell})$ is the sum of the log-categoricals along the single
+root-to-leaf path that contains $R$. Evaluating the likelihood of any rotation
+therefore costs $O(L)$ node scorings for a grid of $N=72\cdot 8^{L}$ cells,
+rather than the $O(N)$ of a retrieval grid.
+
+This argument never used anything special about rotations: it holds for \emph{any}
+pose group with a strict hierarchical equivolumetric partition. We therefore state
+the method as a general framework (\cref{sec:framework}) and instantiate it twice:
+on $\SOthree$ with the Hopf--HEALPix tree above, and on $\SEthree$ by taking the
+Cartesian product of that rotation tree with a bounded equivolumetric translation
+octree (\cref{sec:se3}), under which a joint cell factorizes into a rotation path
+and a translation path and the exact normalization and $O(L)$ likelihood carry over
+unchanged.
+
+We instantiate the tree with a compact head on top of a vision
+transformer~\cite{dosovitskiy2021vit}. A set of learned queries cross-attends to
+the patch tokens to produce the coarsest categorical; a single shared child
+scorer, conditioned on each child's geometry relative to its parent, produces the
+$8$-way categorical at every node. The output layer is zero-initialized, so the
+model starts from the uniform distribution and the training log-likelihood starts
+at the exact uniform floor $-\ln \Vso$. Training is maximum likelihood of the
+single rendered ground-truth rotation---no symmetry annotations, matching the
+IPDF protocol.
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item A \emph{general framework} for pose-distribution estimation that is
+  \emph{exactly normalized by construction}: a tree-structured softmax over any
+  strict hierarchical equivolumetric partition of a pose group. It needs neither a
+  retrieval grid nor a sampled partition function, the exact log-likelihood of any
+  pose is read off in $O(L)$ from a single path, and a uniform predictor provably
+  scores $-\ln V_G$---a data-free self-test (\cref{sec:framework}).
+  \item Two instantiations: $\SOthree$ via the Hopf--HEALPix tree ($8$ children per
+  node), and $\SEthree$ via the Cartesian product of that tree with a bounded
+  equivolumetric translation octree ($64$ joint children per node), which keeps the
+  exact normalization and $O(L)$ likelihood and adds only a detector-sized
+  translation box (\cref{sec:se3}).
+  \item A lightweight cross-attention head on a frozen-init vision transformer that
+  realizes the construction, trained by single-ground-truth maximum likelihood, with
+  an $O(bL)$ beam-search MAP decoder.
+  \item An evaluation on SYMSOL~I under both the distribution and pose metrics, with
+  analysis and ablations (\cref{sec:experiments}): a single joint model reaches
+  $7.71$ average log-likelihood, above the strongest RGB-only baseline ($7.33$,
+  trained per shape), while reading the exact likelihood of any rotation from a
+  single $7$-node path rather than scoring a million-cell grid; its one weak case is
+  the high-order icosahedral object, whose $60$ equivalent modes must be covered at
+  once. The $\SEthree$ instance is exactly normalized by the same construction, which
+  we verify numerically; we define a single protocol that carries it, together with
+  SYMSOL~II and the real-image BOP datasets T-LESS and YCB-Video, across both pose
+  groups (\cref{sec:se3results}).
+\end{itemize}

@@ -1,0 +1,41 @@
+\begin{abstract}
+Estimating the full distribution of an object's pose---rather than a single
+estimate---is essential when symmetry, self-occlusion, or sensor noise make the
+pose ambiguous. The dominant non-parametric approach, Implicit-PDF, represents
+the distribution implicitly as an energy over $\SOthree$ and must evaluate a
+dense equivolumetric grid of millions of rotations---both to approximate the
+normalizer during training and to recover a normalized density at inference.
+A hierarchical variant, SpyroPose, keeps the energy formulation but estimates
+the partition function with importance sampling during training and evaluates a
+sparse coarse-to-fine tree at inference, and extends to $\SEthree$ with an energy
+pyramid. In both cases the distribution is an energy whose cost is tied to how many
+poses are scored.
+
+We revisit the problem from the opposite direction, and in general. For any pose
+group with a \emph{strict} hierarchical equivolumetric partition---one in which
+every cell splits into a fixed number of disjoint equal-volume children---a
+distribution over the leaves is a tree-structured softmax: a categorical over the
+coarsest cells and, at every expanded node, a categorical over its children. This
+is an \emph{exactly} normalized probability by design, independent of the group: no
+retrieval grid and no sampled partition function are ever needed, the log-likelihood
+of any pose is read off in closed form from the $L{+}1$ nodes on its path (cost
+$O(L)$ rather than $O(N)$ for $N$ cells), and a uniform predictor provably scores
+$-\ln V_G$ at every resolution---a data-free self-test of the whole likelihood. We
+instantiate the framework on $\SOthree$ via the Hopf--HEALPix grid (eight children
+per node) and on $\SEthree$ via the Cartesian product of that rotation tree with a
+bounded equivolumetric translation octree (sixty-four children per node). A
+lightweight cross-attention head on an ImageNet-pretrained vision transformer
+realizes the construction, zero-initialized so training starts exactly at the
+uniform distribution, trained by maximum likelihood of the single ground-truth pose.
+
+On SYMSOL~I a single joint model reaches $7.71$ average log-likelihood, surpassing
+the strongest RGB-only baseline while reading any rotation's exact likelihood from a
+seven-node path instead of a million-cell grid, with near-grid-floor beam-MAP
+accuracy except on the high-order icosahedral object, whose sixty equivalent modes
+are the hardest to resolve. The $\SEthree$ instance is exactly normalized by the
+same construction---its uniform predictor provably scores $-\ln(\pi^2 V_{\mathrm{box}})$,
+which we verify numerically to machine precision---and we set up its evaluation,
+together with SYMSOL~II and the real-image BOP datasets T-LESS and YCB-Video, under
+one protocol spanning both pose groups. Code and the preprocessing pipeline will be
+released.
+\end{abstract}

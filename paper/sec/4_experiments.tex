@@ -1,0 +1,423 @@
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+\label{sec:setup}
+
+\paragraph{Benchmark and protocol.}
+We evaluate on SYMSOL~\cite{murphy2021ipdf}. SYMSOL~I contains five textureless
+symmetric solids---tetrahedron, cube, icosahedron, cone, and cylinder---with
+discrete and continuous rotational symmetries; SYMSOL~II contains three marked
+shapes (\textit{sphX}, \textit{cylO}, \textit{tetX}) whose visible markers induce
+view-dependent (dynamic) ambiguity. We follow the IPDF protocol exactly: a single
+model is trained jointly over the five SYMSOL~I shapes, supervised with only the
+single rendered rotation per image and no symmetry labels; at test time the full
+set of equivalent ground-truth rotations is used solely for evaluation.
+
+\paragraph{Metrics.}
+We report two families. (i)~The \emph{distribution} metric is the average
+log-likelihood of the ground-truth rotations, which for an image with equivalent
+set $\{R_k\}$ is $\frac{1}{K}\sum_k \log p(R_k \mid I)$; this is invariant to
+whether one or all equivalent annotations are available~\cite{murphy2021ipdf} and
+a uniform distribution scores $-\ln\Vso\approx-2.29$. (ii)~The \emph{pose} metric
+is the geodesic error of the beam-search MAP estimate to the nearest equivalent
+ground truth, summarized by median/mean error and accuracy at $2^\circ/5^\circ/
+10^\circ$.
+
+\paragraph{Discretization ceiling.}
+Because our density is piecewise-constant on cells, the average log-likelihood is
+upper-bounded, for a given level $L$, by placing all mass uniformly on the
+occupied finest cells of the symmetry set:
+$\log\!\big(N(L)/(n_\text{occ}\cdot\Vso)\big)$. We report this ceiling per shape
+and level in \cref{tab:ceiling} so that model numbers can be read against what the
+grid resolution allows; continuous symmetries (cone, cylinder) have the lowest
+ceilings because their one-parameter orbit occupies many cells.
+
+\paragraph{Implementation.}
+The headline results (\cref{tab:symsol1,tab:pose,tab:efficiency}) use $L{=}6$
+($N=18{,}874{,}368$ cells); the ablations default to $L{=}5$
+($N=2{,}359{,}296$ cells) unless noted. All runs use beam width $8$, the ViT-B/16
+backbone of \cref{sec:head} with roll augmentation (\cref{sec:aug}), and the
+optimizer settings of \cref{sec:training}. Training uses a single RTX~6000~Ada
+(48\,GB) in \texttt{fp32} with gradient checkpointing, shared with other resident
+jobs; the headline $L{=}6$ model trains in about $12$ hours for $60$k steps. The
+per-image inference timings in \cref{tab:efficiency} are measured separately on
+the idle GPU.
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Discretization ceiling} (max attainable average log-likelihood,
+nats) of the cell distribution per shape and level $L$, from the occupied finest
+cells of the symmetry set. Reference, not a result.}
+\label{tab:ceiling}
+\small
+\begin{tabular}{l ccccc}
+\toprule
+$L$ & tet. & cube & ico. & cone & cyl. \\
+\midrule
+3 &  5.74 &  5.05 &  4.13 & 4.35 & 3.66 \\
+4 &  7.82 &  7.13 &  6.21 & 5.74 & 5.05 \\
+5 &  9.90 &  9.21 &  8.29 & 7.13 & 6.43 \\
+6 & 11.98 & 11.29 & 10.37 & 8.58 & 7.89 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{SYMSOL~I: rotation distributions}
+\label{sec:symsol1}
+
+\cref{tab:symsol1} reports average log-likelihood per shape on SYMSOL~I against
+the standard baselines. A \emph{single} joint model over all five shapes reaches
+$7.71$ nats, exceeding the strongest RGB-only baseline (SpyroPose without
+keypoints, $7.33$, which trains one model \emph{per shape}) and improving on the
+joint grid baselines by a wide margin (IPDF $4.10$, I2S $3.41$). Part of this
+margin may owe to the backbone---we use an ImageNet-21k ViT-B/16 where the
+baselines use ResNet-50---which \cref{tab:abl-backbone} isolates. The full
+keypoint-based SpyroPose is stronger still ($8.97$) but relies on 3D CAD
+keypoints and the authors' own re-render, so it is outside the RGB-only regime
+(caption). The two \method{} rows are \emph{separate} models trained at $L{=}5$
+and $L{=}6$; the finer-resolution model gains about a nat ($6.68\!\to\!7.71$), and
+the pure resolution effect at fixed model is isolated in \cref{tab:abl-depth}.
+
+The per-shape pattern is informative when read against the discretization
+ceiling in \cref{tab:ceiling}. The continuous shapes come closest to their
+ceilings: cyl reaches $7.10$ of a possible $7.89$ and cone $7.56$ of $8.58$, both
+within about a nat. The discrete shapes leave substantially more headroom---tet
+and cube score $9.14$ and $9.05$ against ceilings near $12$ and $11$ (gaps of
+$2.8$ and $2.2$ nats)---and the icosahedral object is the clear outlier at $5.69$,
+the lowest of the five and furthest below its ceiling ($10.37$, a $4.7$-nat gap).
+Its $60$ equivalent modes force the density to divide its mass among many
+well-separated peaks at once, which is the binding difficulty here---not the
+continuous rotational manifolds, which the model represents to within about a nat
+of the grid limit.
+
+\begin{table*}[t]
+\centering
+\caption{\textbf{SYMSOL~I rotation distribution estimation}---average
+log-likelihood $\uparrow$ (nats), per shape and overall, on the original SYMSOL~I
+dataset. Uniform scores $-2.29$. ``Model'' is joint (one model over all five
+shapes) or per-shape; ``$L$'' is the evaluation grid level ($N{=}72\cdot 8^{L}$),
+or ``--'' for methods without a rotation grid. Baseline numbers are as reported
+by \cite{murphy2021ipdf} and \cite{haugaard2023spyropose}. SpyroPose's full keypoint-based method is stronger ($7.67/6.96/11.04/
+10.10/9.06$, avg.\ $8.97$) but uses {3D} CAD keypoints and the authors' own
+SYMSOL~I re-render, so it is not directly comparable to {RGB}-only methods on the
+original dataset.}
+\label{tab:symsol1}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l l c c ccccc c}
+\toprule
+Method & Backbone & Model & $L$ & tet. & cube & ico. & cone & cyl. & \textbf{avg.} \\
+\midrule
+Prokudin et al.~\cite{prokudin2018deep}          & \pend & per-shape & -- & $-1.86$ & $-0.50$ & $-2.39$ & $-3.34$ & $-1.28$ & $-1.87$ \\
+Gilitschenski et al.~\cite{gilitschenski2019deep}& \pend & per-shape & -- & $-2.29$ & $-2.29$ & $-2.29$ & $3.84$ & $0.88$ & $-0.43$ \\
+Deng et al.~\cite{deng2022bingham}               & \pend & per-shape & -- & $0.27$ & $-4.44$ & $-2.45$ & $0.16$ & $-0.95$ & $-1.48$ \\
+IPDF~\cite{murphy2021ipdf}                        & ResNet-50 & joint & 5 & $5.70$ & $4.81$ & $1.28$ & $4.45$ & $4.26$ & $4.10$ \\
+I2S~\cite{klee2023image2sphere}                   & ResNet-50 & joint & -- & $4.78$ & $3.27$ & $2.15$ & $3.75$ & $3.10$ & $3.41$ \\
+HyperPosePDF~\cite{hofer2023hyperposepdf}         & \pend & joint & \pend & $7.04$ & $6.77$ & $5.10$ & $5.74$ & $4.73$ & $5.78$ \\
+SpyroPose w/o KP, IS~\cite{haugaard2023spyropose} & ResNet-50 & per-shape & 6 & $6.04$ & $6.23$ & $3.12$ & $6.77$ & $6.07$ & $5.65$ \\
+SpyroPose w/o KP~\cite{haugaard2023spyropose}     & ResNet-50 & per-shape & 6 & $8.69$ & $8.63$ & $5.23$ & $7.62$ & $6.46$ & $7.33$ \\
+\midrule
+\method{} (ours)                                  & ViT-B/16 & joint & 5 & $8.00$ & $7.73$ & $5.12$ & $6.55$ & $6.00$ & $6.68$ \\
+\method{} (ours)                                  & ViT-B/16 & joint & 6 & $\mathbf{9.14}$ & $\mathbf{9.05}$ & $\mathbf{5.69}$ & $7.56$ & $\mathbf{7.10}$ & $\mathbf{7.71}$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{SYMSOL~II: dynamic ambiguity}
+\label{sec:symsol2}
+
+\cref{tab:symsol2} reports SYMSOL~II, where ambiguity depends on marker
+visibility. \TODO{Run: the three marked shapes (tetX, cylO, sphereX) have been
+re-dumped and prepared at $L{=}6$ (\texttt{data/symsol\_II\_*}); $45$k train and
+$5$k test images each. What remains is three per-shape training runs (prior work
+trains one model per marked shape). Note on evaluation: in this
+\texttt{symmetric\_solids} \texttt{tfds} release every marked-shape test image
+carries a \emph{single} ground-truth rotation (verified: $K{=}1$ for all $5{,}000$
+test images of each shape, versus $K{=}12/24/60/360/720$ for SYMSOL~I), so the
+SYMSOL~II metric reduces to log-likelihood at the single annotated pose and the
+equivalent-set machinery is inactive here. Analysis once numbers exist.}
+
+\begin{table}[t]
+\centering
+\caption{\textbf{SYMSOL~II}---average log-likelihood $\uparrow$ (nats). A separate
+model is trained per marked shape, following prior work.}
+\label{tab:symsol2}
+\small
+\begin{tabular}{l cccc}
+\toprule
+Method & sphX & cylO & tetX & \textbf{avg.} \\
+\midrule
+IPDF~\cite{murphy2021ipdf}  & $7.30$ & $6.91$ & $8.49$ & $7.57$ \\
+I2S~\cite{klee2023image2sphere} & $3.74$ & $5.18$ & $5.61$ & $4.84$ \\
+HyperPosePDF~\cite{hofer2023hyperposepdf} & $7.73$ & $7.12$ & $8.53$ & $7.72$ \\
+SpyroPose w/o KP~\cite{haugaard2023spyropose} & $9.07$ & $9.32$ & $9.41$ & $9.27$ \\
+\midrule
+\method{} (ours) & \pend & \pend & \pend & \pend \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Pose accuracy}
+\label{sec:pose}
+\label{sec:poseacc}
+
+Although \method{} is a distribution model, its beam-search MAP estimate yields a
+point prediction. \cref{tab:pose} reports geodesic error and thresholded accuracy
+on SYMSOL~I. Because the MAP estimate is a cell centre, its error is lower-bounded
+by the cell-centre quantization of the grid---about $0.45^\circ$ at $L{=}6$---so
+the pose metric saturates at the grid resolution and should be read against that
+floor. For the continuous and low-order shapes the MAP estimate sits essentially
+at that floor: cone and cyl reach median error $0.51^\circ$ and $0.49^\circ$ with
+$\text{acc@}2^\circ>0.99$, and tet and cube follow at $0.6$--$0.7^\circ$ with
+$\text{acc@}2^\circ$ of $0.93$--$0.96$. The icosahedral object is again the
+outlier (median $1.71^\circ$, mean $2.58^\circ$, $\text{acc@}2^\circ=0.579$).
+Because the error is measured to the \emph{nearest} equivalent ground truth, this
+is not mode confusion---landing on any of the $60$ symmetric copies would score
+near $0^\circ$---but \emph{within-mode} localization: with the density mass
+divided across those copies, each per-mode peak is broad, so the argmax leaf lands
+a few cells off the true pose. The per-level decomposition
+(\cref{tab:supp-perlevel}) is consistent with this, icosa paying the largest
+penalties at the finest levels. The errors stay well below the $\ge\!72^\circ$
+spacing between icosahedral modes, hence the recovery by $\text{acc@}10^\circ$
+($0.975$); the same broad-peak cause underlies icosa's low log-likelihood in
+\cref{tab:symsol1}. The overall median of $0.61^\circ$ confirms that, icosa aside,
+the MAP estimate is accurate to the grid floor.
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Pose accuracy on SYMSOL~I.} Geodesic error (degrees, $\downarrow$)
+of the beam-MAP estimate to the nearest equivalent ground truth, and accuracy
+($\uparrow$) at angular thresholds. Overall row averaged over the five shapes.}
+\label{tab:pose}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l cc ccc}
+\toprule
+Shape & Med.$^\circ$ & Mean$^\circ$ & acc@$2^\circ$ & acc@$5^\circ$ & acc@$10^\circ$ \\
+\midrule
+tet.  & $0.69$ & $0.98$ & $0.928$ & $0.988$ & $0.995$ \\
+cube  & $0.60$ & $0.92$ & $0.960$ & $0.981$ & $0.987$ \\
+ico.  & $1.71$ & $2.58$ & $0.579$ & $0.900$ & $0.975$ \\
+cone  & $0.51$ & $0.53$ & $0.998$ & $1.000$ & $1.000$ \\
+cyl.  & $0.49$ & $0.50$ & $0.999$ & $1.000$ & $1.000$ \\
+\midrule
+\textbf{all} & $0.61$ & $1.11$ & $0.893$ & $0.974$ & $0.992$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Efficiency}
+\label{sec:efficiency}
+
+A central claim is that a normalized density costs $O(L)$ rather than $O(N)$.
+\cref{tab:efficiency} bears this out. To read the exact, normalized likelihood of
+a rotation at $L{=}6$, \method{} scores a single root-to-leaf path---$L{+}1{=}7$
+node evaluations, $5.3$\,ms/image---whereas IPDF must evaluate its entire
+$2.36$M-cell grid to obtain the same normalization. \method{} does this on a grid
+that is itself $8\times$ finer ($18.9$M cells), so the saving is more than five
+orders of magnitude in evaluations at a strictly higher resolution. The beam-MAP
+decoder adds only the $1{+}bL{=}49$ node scorings needed to return a point
+estimate ($24.0$\,ms/image). The model is a $114.9$M-parameter ViT-B/16 with a
+peak footprint of $1857$\,MB, so both modes run comfortably on a single GPU.
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Efficiency.} Node/function evaluations to obtain a \emph{normalized}
+density, peak GPU memory, and per-image time (batch size $1$). ``grid size'' is each
+method's operating resolution ($N{=}72\cdot8^{L}$): IPDF must score its full
+equal-area grid, whereas \method{} is evaluated at $L{=}6$ ($N{\approx}18.9$M, a
+grid $8\times$ finer than IPDF's $L{=}5$ grid) yet scores
+only one path per rotation for the likelihood and $1{+}bL$ nodes for beam-MAP.
+Timing and peak memory are measured on an otherwise idle RTX~6000~Ada at batch
+size $1$; peak memory ($1857$\,MB) is measured once over both passes and is
+dominated by beam-MAP. Baseline memory/time were not measured under our setup
+(``--'').}
+\label{tab:efficiency}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l cccc}
+\toprule
+Method & grid size & \#eval & mem.\ (MB) & time (ms) \\
+\midrule
+IPDF~\cite{murphy2021ipdf} & $2.36$M ($L5$) & $2.36$M & -- & -- \\
+SpyroPose~\cite{haugaard2023spyropose} & pyramid & $\mathcal{O}(k\,8\,L)$ & -- & -- \\
+\method{} (likelihood) & $18.9$M ($L6$) & $L{+}1{=}7$ & $1857$ & $5.3$ \\
+\method{} (MAP, $b{=}8$) & $18.9$M ($L6$) & $1{+}bL{=}49$ & $1857$ & $24.0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablations}
+\label{sec:ablations}
+
+We ablate the main design choices on SYMSOL~I (average log-likelihood unless
+noted). Further ablations---image backbone, child-scorer conditioning, and the
+training objective (exact tree-MLE vs.\ an importance-sampled energy)---are set up
+in \cref{sec:supp-ablations}.
+
+\paragraph{Grid depth.}
+Our data is dumped at level $6$, so a single level-6 model can be read out at any
+level $L\le 6$ by truncating paths; \cref{tab:abl-depth} is therefore a
+\emph{resolution-transfer} sweep of one model, not a retraining study. Average
+log-likelihood rises monotonically with depth ($4.16\!\to\!5.57\!\to\!6.78\!\to\!
+7.72$)---as expected whenever each level's child scorer improves on the uniform
+split, which holds throughout here, since a finer level then only adds positive
+log-probability along the path. The per-level gains shrink ($+1.41$, $+1.21$, $+0.94$) while the
+discretization ceiling of \cref{tab:ceiling} rises faster ($\approx\!+1.8$/level),
+so the gap to the ceiling \emph{widens} with depth---from $0.43$ nats at $L{=}3$
+to $2.30$ at $L{=}6$---i.e.\ the finer grid offers more headroom than
+single-rotation training fills. The effect is shape-dependent: the icosahedral
+object gains least from $L{=}5\!\to\!6$ ($+0.51$ vs.\ $+0.9$--$1.2$ for the
+others), again indicating that its difficulty is mode coverage rather than grid
+resolution. The $L{=}6$ readout ($7.72$ on this subset) matches the full test-set
+$7.71$ of \cref{tab:symsol1}, confirming the subset is representative. A direct
+check shows the transfer is essentially lossless: on a matched subset, reading the
+$L{=}6$ model at $L{=}5$ ($6.78$) slightly \emph{exceeds} a model trained natively
+at $L{=}5$ ($6.69$, itself matching the \cref{tab:symsol1} row), so training once
+at the finest resolution and reading out any coarser level costs nothing.
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Grid depth (resolution transfer).} A \emph{single} level-6 model;
+its tree-structured density is marginalized (paths truncated) to level
+$L\in\{3,4,5,6\}$ and scored, with no retraining. Average equivariant-set
+log-likelihood per shape over $400$ test images/shape. The $L{=}6$ readout
+($7.72$) matches the full test-set headline in \cref{tab:symsol1} ($7.71$).}
+\label{tab:abl-depth}
+\small
+\begin{tabular}{c ccccc c}
+\toprule
+$L$ & tet. & cube & ico. & cone & cyl. & \textbf{avg.} \\
+\midrule
+3 & 5.16 & 4.62 & 3.18 & 4.25 & 3.58 & 4.16 \\
+4 & 6.74 & 6.33 & 4.36 & 5.53 & 4.87 & 5.57 \\
+5 & 8.08 & 7.87 & 5.22 & 6.69 & 6.03 & 6.78 \\
+6 & 9.10 & 9.07 & 5.73 & 7.61 & 7.10 & \textbf{7.72} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Shared vs.\ per-level scorer, and beam width.}
+\cref{tab:abl-misc} compares the shared child scorer against one scorer per level,
+and sweeps the decoding beam width (pose accuracy; headline $L{=}6$ model, $300$
+test images/shape). The beam sweep shows clear diminishing returns past $b{=}8$:
+tight accuracy improves monotonically with the beam ($\text{acc@}2^\circ$ rising
+$0.845\!\to\!0.897$ from $b{=}1$ to $16$), but the $\text{acc@}10^\circ$ tail peaks
+at $b{=}8$ ($0.991$) and \emph{regresses} at $b{=}16$ ($0.979$ overall, and
+$0.923$ on icosa alone). A wider beam retains more distant candidates, which
+occasionally lets a spurious high-scoring cell far from the true pose win the MAP
+and inflate the large-error tail on the high-symmetry shape; we therefore use
+$b{=}8$ throughout. \TODO{scorer sharing (left column) pending the per-level-scorer
+training run.}
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Ablation: scorer sharing and beam width.} Left: distribution
+metric for shared vs.\ per-level child scorers. Right: pose accuracy
+(acc@$10^\circ$) vs.\ beam width $b$.}
+\label{tab:abl-misc}
+\small
+\begin{tabular}{l c @{\hskip 1.5em} c c}
+\toprule
+Scorer & avg.\ LL & $b$ & acc@$10^\circ$ \\
+\midrule
+shared (ours)   & \pend & 1  & $0.982$ \\
+per-level       & \pend & 4  & $0.990$ \\
+                &       & 8  & $\mathbf{0.991}$ \\
+                &       & 16 & $0.979$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Training length.}
+Because single-rotation training can overfit which equivalent copy a view was
+paired with, we track the distribution metric against training length
+(\cref{tab:abl-steps}). Without augmentation the held-out log-likelihood climbs,
+peaks at step~30k ($4.84$), and then \emph{degrades}---by step~35k it has already
+fallen to $4.60$ and is dropping faster each evaluation, the signature of the
+model memorizing which symmetric copy each view was rendered with rather than
+learning the shape. Exact in-plane roll augmentation (\cref{sec:aug}) removes this
+turnover entirely: the curve rises monotonically to $6.69$ at step~60k and is
+still increasing, with no sign of the memorization collapse. The gain is largest
+on the high-order shapes---icosahedral held-out LL goes from $2.21$ at the
+baseline peak to $5.08$---confirming that the deficit on symmetric shapes was a
+generalization failure, not a capacity or resolution limit.
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Ablation: training length.} Overall SYMSOL~I average
+log-likelihood vs.\ training steps, from step-tagged checkpoints evaluated on a
+held-out split carved from the training set (not the test set). Both runs share
+every hyperparameter; the only difference is roll augmentation. ``--'' marks steps
+past where the un-augmented run was stopped after its turnover.}
+\label{tab:abl-steps}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l ccccccc}
+\toprule
+steps (k) & 10 & 20 & 30 & 35 & 40 & 50 & 60 \\
+\midrule
+baseline (no aug.)   & $2.98$ & $4.39$ & $\mathbf{4.84}$ & $4.60$ & -- & -- & -- \\
+$+$ roll augmentation & $3.11$ & $4.73$ & $5.52$ & $5.92$ & $6.16$ & $6.59$ & $\mathbf{6.69}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{\texorpdfstring{$\SEthree$}{SE(3)} pose distributions: T-LESS and YCB-Video}
+\label{sec:se3results}
+
+We evaluate the $\SEthree$ instantiation of \cref{sec:se3} on two real-image BOP
+datasets~\cite{nguyen2024bop}. On \textbf{T-LESS} we report the full-$\SEthree$
+distribution log-likelihood of the ground-truth pose (\cref{tab:tless}), directly
+comparable to SpyroPose, the only prior method with quantitative $\SEthree$
+distribution results; following it we train on physically-based renders (PBR) and
+evaluate on the real test images of four representative objects, and size the
+translation box from the detection (\cref{sec:se3}). On \textbf{YCB-Video} no prior
+$\SEthree$ \emph{distribution} baseline exists, so we report point accuracy under
+the BOP metrics from the beam-MAP estimate and provide the first SE(3)
+distribution log-likelihood as a reference (\cref{tab:ycbv}); HB~\cite{nguyen2024bop}
+is the natural second distribution benchmark (SpyroPose reports it) and we treat it
+as an extension. \TODO{Fill both tables: needs the $\SEthree$ head trained on the
+T-LESS/YCB-V PBR splits (data not yet downloaded; $\sim\!30$/$100$\,GB) and the
+BOP evaluation. Report in-box coverage alongside each likelihood.}
+
+\begin{table}[t]
+\centering
+\caption{\textbf{$\SEthree$ distribution estimation on T-LESS}---average
+log-likelihood $\uparrow$ of the ground-truth pose on the real test images of four
+representative objects, PBR-trained. Baseline numbers are SpyroPose's real-image
+results~\cite{haugaard2023spyropose}; uniform over the $\SEthree$ grid scores
+$\approx\!2.7$. We also report in-box translation coverage.}
+\label{tab:tless}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l cccc c}
+\toprule
+Method & obj~1 & obj~14 & obj~25 & obj~27 & \textbf{avg.} \\
+\midrule
+Uniform~\cite{haugaard2023spyropose}            & $3.5$ & $3.3$ & $2.4$ & $1.7$ & $2.7$ \\
+SpyroPose w/o IS~\cite{haugaard2023spyropose}   & $14.1$ & $15.9$ & $19.2$ & $17.2$ & $16.6$ \\
+SpyroPose~\cite{haugaard2023spyropose}          & $16.9$ & $17.5$ & $20.8$ & $20.0$ & $18.8$ \\
+\midrule
+\method{} (ours) & \pend & \pend & \pend & \pend & \pend \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{\textbf{YCB-Video.} Point accuracy of the beam-MAP pose under the BOP
+metrics (no prior $\SEthree$ \emph{distribution} baseline exists), with the
+$\SEthree$ distribution log-likelihood and in-box coverage reported as a reference.}
+\label{tab:ycbv}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l ccc}
+\toprule
+Method & ADD(-S) $\uparrow$ & BOP AR $\uparrow$ & avg.\ LL $\uparrow$ \\
+\midrule
+\method{} (ours) & \pend & \pend & \pend \\
+\bottomrule
+\end{tabular}
+\end{table}

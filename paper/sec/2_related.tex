@@ -1,0 +1,70 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Parametric distributions on \texorpdfstring{$\SOthree$}{SO(3)}.}
+A long line of work models rotational uncertainty with a parametric density whose
+parameters are regressed from the image. The von
+Mises~\cite{prokudin2018deep}, Bingham~\cite{gilitschenski2019deep,deng2022bingham},
+and matrix-Fisher~\cite{mohlin2020matrixfisher} distributions are the most common
+choices; multimodality is obtained by mixing components. These models are compact and have closed-form statistics,
+but their normalizing constants require lookup tables or series approximations,
+and a fixed number of modes limits how faithfully they can represent high-order
+or continuous symmetries~\cite{murphy2021ipdf}. The Rotation
+Laplace distribution~\cite{yin2023rotationlaplace} improves robustness within the
+parametric family.
+
+\paragraph{Non-parametric and implicit distributions.}
+Implicit-PDF~\cite{murphy2021ipdf} represents the distribution implicitly as a
+network that scores (image, rotation) pairs, normalized over an equivolumetric
+Hopf--HEALPix grid~\cite{yershova2010so3grids,gorski2005healpix}, and introduced the SYMSOL benchmark we use.
+It is maximally expressive and trains from a single pose, but a normalized
+density requires a dense grid evaluation at inference. HyperPosePDF~\cite{hofer2023hyperposepdf}
+predicts the weights of such an implicit function with a hypernetwork.
+Image2Sphere~\cite{klee2023image2sphere} maps image features onto the sphere and
+applies $\SOthree$-equivariant layers before scoring, improving generalization at
+a lower resolution. AQuaMaM~\cite{alcorn2023aquamam} is autoregressive over a
+quaternion manifold. Our method is non-parametric in the same sense---arbitrarily
+many modes at arbitrary resolution---but differs in that the distribution is
+normalized analytically rather than by grid evaluation or sampling.
+
+\paragraph{Hierarchical grids and the partition function.}
+SpyroPose~\cite{haugaard2023spyropose} is the closest prior work: it uses the
+same hierarchical Hopf--HEALPix grid, extended to an $\SEthree$ pyramid, and is
+the state of the art on SYMSOL rotation distributions. It learns an
+\emph{energy} (unnormalized log-likelihood) at each resolution with an
+InfoNCE/NCE objective~\cite{oord2018cpc}, using the hierarchy to draw hard negatives for
+an importance-sampling estimate of the partition function during training.
+Notably, SpyroPose already derives a product-of-sibling-softmaxes form
+(its Eq.~6), a ``generative coarse-to-fine Markov chain,'' but uses it only as
+the importance-sampling \emph{proposal} during training; at inference it expands
+the top-$k$ cells level by level and renormalizes their children, so the fine
+density, while normalized, depends on the expansion width $k$.
+Our contribution is to make that factored form the \emph{model itself}: we train
+the tree-structured softmax directly by exact maximum likelihood, with no
+negatives and no partition-function estimate, so the exact log-likelihood of a
+rotation comes from a single root-to-leaf path and a full-depth density is
+independent of any $k$. We further replace the per-level MLPs with a single,
+shared, geometry-conditioned child scorer. The construction connects to
+hierarchical softmax~\cite{morin2005hierarchical} and to autoregressive models over discretized
+manifolds~\cite{alcorn2023aquamam}, with the tree depth playing the role of the
+autoregressive axis.
+
+\paragraph{Generative and equivariant approaches.}
+Recent work models pose distributions with normalizing flows on
+$\SOthree$~\cite{liu2023so3flow}, score-based diffusion on
+$\SEthree$~\cite{hsiao2023confronting}, and direct prediction of Wigner-D
+harmonic coefficients~\cite{lee2024wignerd}. Flows and diffusion produce
+samples and (for flows) densities but require integration or iterative sampling
+to evaluate a likelihood; our density is available in closed form in a single
+forward pass per path.
+
+\paragraph{Benchmarks.}
+Our protocol spans both pose groups. For rotation we use
+SYMSOL~\cite{murphy2021ipdf} (distributions on synthetic symmetric solids). For
+full $\SEthree$ we target the real-image objects T-LESS~\cite{hodan2017tless} and
+YCB-Video~\cite{xiang2018posecnn} under the BOP~\cite{nguyen2024bop} protocol---the
+standard testbeds for pose estimation under symmetry and clutter---following the
+detector-conditioned, translation-box setup under which SpyroPose reports
+$\SEthree$ log-likelihoods~\cite{haugaard2023spyropose}. YCB-Video additionally
+admits point-based pose metrics (ADD(-S))~\cite{xiang2018posecnn}, letting a
+distribution model be scored against single-pose regressors.

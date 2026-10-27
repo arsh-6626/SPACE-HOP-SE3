@@ -1,0 +1,277 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Entries whose authors/venues were verified against the source PDFs
+%% (via literature lookup of the papers themselves or of reference lists
+%% that cite them). A few venues are given as arXiv where not confirmed.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ---- Core distribution-on-SO(3) methods ----
+@inproceedings{murphy2021ipdf,
+  title     = {Implicit-{PDF}: Non-Parametric Representation of Probability
+               Distributions on the Rotation Manifold},
+  author    = {Murphy, Kieran A. and Esteves, Carlos and Jampani, Varun and
+               Ramalingam, Srikumar and Makadia, Ameesh},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  pages     = {7882--7893},
+  year      = {2021}
+}
+
+@inproceedings{haugaard2023spyropose,
+  title     = {{SpyroPose}: {SE(3)} Pyramids for Object Pose Distribution Estimation},
+  author    = {Haugaard, Rasmus Laurvig and Hagelskj{\ae}r, Frederik and
+               Iversen, Thorbj{\o}rn Mosekj{\ae}r},
+  booktitle = {IEEE/CVF International Conference on Computer Vision (ICCV)},
+  year      = {2023}
+}
+
+@inproceedings{klee2023image2sphere,
+  title     = {Image to Sphere: Learning Equivariant Features for Efficient
+               Pose Prediction},
+  author    = {Klee, David M. and Biza, Ondrej and Platt, Robert and
+               Walters, Robin},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2023}
+}
+
+@inproceedings{hofer2023hyperposepdf,
+  title     = {{HyperPosePDF}: Hypernetworks Predicting the Probability
+               Distribution on {SO(3)}},
+  author    = {H{\"o}fer, Timon and Kiefer, Benjamin and Messmer, Martin and
+               Zell, Andreas},
+  booktitle = {IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)},
+  pages     = {2369--2379},
+  year      = {2023}
+}
+
+@article{alcorn2023aquamam,
+  title   = {{AQuaMaM}: An Autoregressive, Quaternion Manifold Model for
+             Rapidly Estimating Complex {SO(3)} Distributions},
+  author  = {Alcorn, Michael A.},
+  journal = {arXiv preprint arXiv:2301.08838},
+  year    = {2023}
+}
+
+@inproceedings{lee2024wignerd,
+  title     = {{3D} Equivariant Pose Regression via Direct {Wigner-D} Harmonics
+               Prediction},
+  author    = {Lee, Jongmin and Cho, Minsu},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2024}
+}
+
+@inproceedings{liu2023so3flow,
+  title     = {Delving into Discrete Normalizing Flows on {SO(3)} Manifold for
+               Probabilistic Rotation Modeling},
+  author    = {Liu, Yulin and Liu, Haoran and Yin, Yingda and Wang, Yang and
+               Chen, Baoquan and Wang, He},
+  booktitle = {IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {21264--21273},
+  year      = {2023}
+}
+
+@inproceedings{yin2023rotationlaplace,
+  title     = {A Laplace-Inspired Distribution on {SO(3)} for Probabilistic
+               Rotation Estimation},
+  author    = {Yin, Yingda and Wang, Yang and Wang, He and Chen, Baoquan},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2023}
+}
+
+@article{hsiao2023confronting,
+  title   = {Confronting Ambiguity in {6D} Object Pose Estimation via
+             Score-Based Diffusion on {SE(3)}},
+  author  = {Hsiao, Tsu-Ching and Chen, Hao-Wei and Yang, Hsuan-Kung and
+             Lee, Chun-Yi},
+  journal = {arXiv preprint arXiv:2305.15873},
+  year    = {2023}
+}
+
+% ---- Parametric SO(3) distribution baselines ----
+@inproceedings{prokudin2018deep,
+  title     = {Deep Directional Statistics: Pose Estimation with Uncertainty
+               Quantification},
+  author    = {Prokudin, Sergey and Gehler, Peter and Nowozin, Sebastian},
+  booktitle = {European Conference on Computer Vision (ECCV)},
+  pages     = {534--551},
+  year      = {2018}
+}
+
+@inproceedings{gilitschenski2019deep,
+  title     = {Deep Orientation Uncertainty Learning Based on a Bingham Loss},
+  author    = {Gilitschenski, Igor and Sahoo, Roshni and Schwarting, Wilko and
+               Amini, Alexander and Karaman, Sertac and Rus, Daniela},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2019}
+}
+
+@article{deng2022bingham,
+  title   = {Deep Bingham Networks: Dealing with Uncertainty and Ambiguity in
+             Pose Estimation},
+  author  = {Deng, Haowen and Bui, Mai and Navab, Nassir and Guibas, Leonidas
+             and Ilic, Slobodan and Birdal, Tolga},
+  journal = {International Journal of Computer Vision},
+  volume  = {130},
+  number  = {7},
+  pages   = {1627--1654},
+  year    = {2022}
+}
+
+@article{mohlin2020matrixfisher,
+  title   = {Probabilistic Orientation Estimation with Matrix Fisher Distributions},
+  author  = {Mohlin, David and Sullivan, Josephine and Bianchi, G{\'e}rald},
+  journal = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume  = {33},
+  pages   = {4884--4893},
+  year    = {2020}
+}
+
+% ---- Backbone, grid, and training machinery ----
+@inproceedings{dosovitskiy2021vit,
+  title     = {An Image is Worth 16x16 Words: Transformers for Image
+               Recognition at Scale},
+  author    = {Dosovitskiy, Alexey and Beyer, Lucas and Kolesnikov, Alexander
+               and Weissenborn, Dirk and Zhai, Xiaohua and Unterthiner, Thomas
+               and Dehghani, Mostafa and Minderer, Matthias and Heigold, Georg
+               and Gelly, Sylvain and Uszkoreit, Jakob and Houlsby, Neil},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2021}
+}
+
+@inproceedings{vaswani2017attention,
+  title     = {Attention Is All You Need},
+  author    = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and
+               Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N. and
+               Kaiser, Lukasz and Polosukhin, Illia},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  pages     = {5998--6008},
+  year      = {2017}
+}
+
+@inproceedings{he2016resnet,
+  title     = {Deep Residual Learning for Image Recognition},
+  author    = {He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {770--778},
+  year      = {2016}
+}
+
+@inproceedings{mildenhall2020nerf,
+  title     = {{NeRF}: Representing Scenes as Neural Radiance Fields for View
+               Synthesis},
+  author    = {Mildenhall, Ben and Srinivasan, Pratul P. and Tancik, Matthew
+               and Barron, Jonathan T. and Ramamoorthi, Ravi and Ng, Ren},
+  booktitle = {European Conference on Computer Vision (ECCV)},
+  year      = {2020}
+}
+
+@article{gorski2005healpix,
+  title   = {{HEALPix}: A Framework for High-Resolution Discretization and Fast
+             Analysis of Data Distributed on the Sphere},
+  author  = {G{\'o}rski, Krzysztof M. and Hivon, Eric and Banday, Anthony J. and
+             Wandelt, Benjamin D. and Hansen, Frode K. and Reinecke, Martin and
+             Bartelmann, Matthias},
+  journal = {The Astrophysical Journal},
+  volume  = {622},
+  number  = {2},
+  pages   = {759},
+  year    = {2005}
+}
+
+@article{yershova2010so3grids,
+  title   = {Generating Uniform Incremental Grids on {SO(3)} Using the Hopf
+             Fibration},
+  author  = {Yershova, Anna and Jain, Swati and LaValle, Steven M. and
+             Mitchell, Julie C.},
+  journal = {The International Journal of Robotics Research},
+  volume  = {29},
+  number  = {7},
+  pages   = {801--812},
+  year    = {2010}
+}
+
+@article{zonca2019healpy,
+  title   = {healpy: Equal Area Pixelization and Spherical Harmonics Transforms
+             for Data on the Sphere in {Python}},
+  author  = {Zonca, Andrea and Singer, Leo and Lenz, Daniel and Reinecke, Martin
+             and Rosset, Cyrille and Hivon, Eric and G{\'o}rski, Krzysztof},
+  journal = {Journal of Open Source Software},
+  volume  = {4},
+  number  = {35},
+  pages   = {1298},
+  year    = {2019}
+}
+
+% ---- Benchmarks ----
+@inproceedings{hodan2017tless,
+  title     = {{T-LESS}: An {RGB-D} Dataset for {6D} Pose Estimation of
+               Texture-less Objects},
+  author    = {Hodan, Tom{\'a}{\v{s}} and Haluza, Pavel and Obdr{\v{z}}{\'a}lek,
+               {\v{S}}tep{\'a}n and Matas, Jiri and Lourakis, Manolis and
+               Zabulis, Xenophon},
+  booktitle = {IEEE Winter Conference on Applications of Computer Vision (WACV)},
+  pages     = {880--888},
+  year      = {2017}
+}
+
+@inproceedings{xiang2018posecnn,
+  title     = {{PoseCNN}: A Convolutional Neural Network for {6D} Object Pose
+               Estimation in Cluttered Scenes},
+  author    = {Xiang, Yu and Schmidt, Tanner and Narayanan, Venkatraman and
+               Fox, Dieter},
+  booktitle = {Robotics: Science and Systems (RSS)},
+  year      = {2018}
+}
+
+@article{nguyen2024bop,
+  title   = {{BOP} Challenge 2024 on Model-Based and Model-Free {6D} Object
+             Pose Estimation},
+  author  = {Nguyen, Van Nguyen and Hodan, Tom{\'a}{\v{s}} and others},
+  journal = {arXiv preprint arXiv:2504.02812},
+  year    = {2024}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% STILL TO VERIFY (cited in text as \TODO{cite}); confirm before camera-ready:
+%%   - Morin & Bengio 2005, hierarchical softmax.
+%%   - van den Oord et al. 2018, InfoNCE / CPC.
+%%   - Loshchilov & Hutter 2019, AdamW (Decoupled Weight Decay).
+%%   - Smith & Topin, OneCycle / super-convergence.
+%%   - Wightman, timm (PyTorch Image Models).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%% added: previously \TODO{cite} placeholders %%%%%%%%%%%
+@inproceedings{morin2005hierarchical,
+  title     = {Hierarchical Probabilistic Neural Network Language Model},
+  author    = {Morin, Fr{\'e}d{\'e}ric and Bengio, Yoshua},
+  booktitle = {Proceedings of the International Workshop on Artificial Intelligence and Statistics (AISTATS)},
+  pages     = {246--252},
+  year      = {2005}
+}
+
+@article{oord2018cpc,
+  title   = {Representation Learning with Contrastive Predictive Coding},
+  author  = {van den Oord, Aaron and Li, Yazhe and Vinyals, Oriol},
+  journal = {arXiv preprint arXiv:1807.03748},
+  year    = {2018}
+}
+
+@inproceedings{loshchilov2019adamw,
+  title     = {Decoupled Weight Decay Regularization},
+  author    = {Loshchilov, Ilya and Hutter, Frank},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2019}
+}
+
+@inproceedings{smith2019onecycle,
+  title     = {Super-Convergence: Very Fast Training of Neural Networks Using Large Learning Rates},
+  author    = {Smith, Leslie N. and Topin, Nicholay},
+  booktitle = {Artificial Intelligence and Machine Learning for Multi-Domain Operations Applications (SPIE)},
+  year      = {2019}
+}
+
+@misc{wightman2019timm,
+  title        = {{PyTorch Image Models}},
+  author       = {Wightman, Ross},
+  howpublished = {\url{https://github.com/huggingface/pytorch-image-models}},
+  doi          = {10.5281/zenodo.4414861},
+  year         = {2019}
+}

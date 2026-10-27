@@ -1,0 +1,235 @@
+\section{Method}
+\label{sec:method}
+
+We cast pose-distribution estimation as a tree-structured softmax on a
+\emph{strict hierarchical equivolumetric partition} of the pose group.
+\cref{sec:framework} states the construction for a general group: any such
+partition induces an exactly-normalized density whose log-likelihood is read off
+in $O(L)$ from a single root-to-leaf path, with no normalizing integral to
+approximate. We then instantiate it on $\SOthree$
+(\cref{sec:grid}, the Hopf--HEALPix tree) and on $\SEthree$ (\cref{sec:se3}, the
+Cartesian product of the rotation tree with a bounded translation octree), realize
+both with a single cross-attention head on a vision transformer
+(\cref{sec:head}), train by single-ground-truth maximum likelihood
+(\cref{sec:training}), and decode a MAP pose by beam search (\cref{sec:decode}).
+
+\subsection{General framework}
+\label{sec:framework}
+
+Let $G$ be a group (or homogeneous space) carrying an invariant measure of finite
+total volume $V_G$. Suppose $G$ admits a \emph{strict hierarchical equivolumetric
+partition}: a set of $N_0$ root cells of equal volume, in which every cell is
+subdivided into exactly $b$ \emph{disjoint} children of equal volume, so level $L$
+has $N(L)=N_0\,b^{\,L}$ equal-volume cells and each finest cell is identified by a
+unique path $(c_0,c_1,\dots,c_L)$ with $c_0\in\{0,\dots,N_0{-}1\}$ and
+$c_l\in\{0,\dots,b{-}1\}$. On such a tree a distribution over the finest cells is a
+product of per-node categoricals: a root categorical $\pi_0\in\Delta^{N_0-1}$ and,
+at every internal node $n$, a categorical $\pi_n\in\Delta^{b-1}$ over its children,
+\begin{equation}
+  P(c_0,\dots,c_L) \;=\; \pi_0[c_0]\prod_{l=1}^{L}\pi_{n_{l-1}}[c_l].
+\end{equation}
+Every factor is a normalized categorical, so $\sum P = 1$ \emph{exactly} at every
+depth, with no partition function to sample or integrate. The induced density is
+piecewise-constant with value $p(x)=P(\mathrm{cell}_L(x))\,N(L)/V_G$, so a uniform
+predictor gives $p\equiv 1/V_G$ and average log-likelihood $-\ln V_G$ at every
+level---an exact, data-free self-test of the entire likelihood path. Evaluating
+$\log p(x)$ for any $x$ touches only the $L{+}1$ nodes on its path ($O(L)$), versus
+the $O(N)$ evaluation a retrieval grid needs for a normalized density, and a MAP
+estimate follows from an $O(bL)$ beam search. The remaining design choices are
+group-specific: the partition (hence $N_0$ and $b$) and how a network conditions
+each node's categorical. We give two instances: $\SOthree$ ($N_0{=}72$, $b{=}8$,
+$V_G{=}\Vso$) and $\SEthree$ ($b{=}64$, $V_G{=}\Vso\!\cdot\!V_{\text{box}}$).
+
+\subsection{Instantiation~I: \texorpdfstring{$\SOthree$}{SO(3)}}
+\label{sec:grid}
+
+We use the equivolumetric grid of Yershova et al.~\cite{yershova2010so3grids}, as adopted by
+IPDF~\cite{murphy2021ipdf}: the $2$-sphere base point is tiled by
+HEALPix~\cite{gorski2005healpix} in the \textsc{nested} scheme ($12\,\textit{nside}^2$
+equal-area pixels) and the Hopf fibre by $6\,\textit{nside}$ equal angles, giving
+\begin{equation}
+  N(l) \;=\; 72 \cdot 8^{\,l}
+\end{equation}
+equal-volume cells at level $l$, with total volume $V_{\SOthree}=\Vso$. The key
+property we exploit, beyond equal volume, is that the grid is a \emph{strict
+tree}: doubling \textit{nside} splits every HEALPix pixel into $4$ (\textsc{nested})
+and every fibre bin into $2$, so each cell has exactly $8$ \emph{disjoint}
+children. A finest cell at level $L$ is therefore identified by a unique path
+$(c_0, c_1, \dots, c_L)$, where $c_0 \in \{0,\dots,71\}$ indexes the coarsest cell
+and each $c_l \in \{0,\dots,7\}$ selects a child. We map between a rotation and
+its cell via the Hopf lift and its inverse, so the path of any rotation is
+obtained directly without enumerating the grid.
+
+\subsection{Tree-structured softmax distribution}
+\label{sec:dist}
+
+We define a distribution over the $N(L)$ finest cells as a product of per-node
+categoricals. Let $\pi_0 \in \Delta^{71}$ be a categorical over the $72$ coarsest
+cells, and for every internal node $n$ let $\pi_n \in \Delta^{7}$ be a categorical
+over its $8$ children. The probability of a finest cell with path
+$(c_0,\dots,c_L)$ is
+\begin{equation}
+  P(c_0,\dots,c_L) \;=\; \pi_0[c_0] \prod_{l=1}^{L} \pi_{n_{l-1}}[c_l],
+  \label{eq:treeprob}
+\end{equation}
+where $n_{l-1}$ is the node reached after $l-1$ steps. Because every factor is a
+normalized categorical, $\sum P = 1$ \emph{exactly}, at every depth $L$, with no
+normalizing integral to approximate. The continuous density assigns each cell its
+probability spread over its volume,
+\begin{equation}
+  p(R) \;=\; P\big(\mathrm{cell}_L(R)\big)\cdot \frac{N(L)}{\Vso},
+  \qquad
+  \log p(R) = \log P + \ln\frac{N(L)}{\Vso}.
+  \label{eq:density}
+\end{equation}
+A uniform predictor ($\pi_0$ and all $\pi_n$ uniform) gives
+$p(R)=1/\Vso$ and average log-likelihood $-\ln\Vso \approx -2.29$ nats at every
+level---an exact self-test of the whole likelihood path, independent of data or
+training. Crucially, computing $\log p(R)$ for any $R$ touches only the $L{+}1$
+nodes on its path: cost $O(L)$, versus the $O(N)$ grid evaluation a retrieval
+model needs for a normalized density.
+
+\subsection{Network}
+\label{sec:head}
+
+\paragraph{Backbone.}
+We use an ImageNet-pretrained ViT-B/16
+(\texttt{augreg2\_in21k\_ft\_in1k})~\cite{dosovitskiy2021vit,wightman2019timm}
+at $224\times224$, taking its patch tokens
+$\mathbf{Z}\in\RR^{P\times D}$ ($D=768$) after dropping the prefix tokens, and
+fine-tune it end to end. Note this departs from the ResNet-50 used by
+IPDF~\cite{murphy2021ipdf} and SpyroPose~\cite{haugaard2023spyropose}; because
+the backbone is a confound when comparing distribution formulations, we include
+a backbone-matched comparison in \cref{sec:ablations} (\cref{tab:abl-backbone}).
+
+\paragraph{Coarsest categorical.}
+A set of $72$ learned query embeddings cross-attends to the patch tokens through
+a small transformer (two layers, eight heads, query-only updates with an MLP) and
+is projected to one logit each; a log-softmax over the $72$ logits gives
+$\log\pi_0$.
+
+\paragraph{Child scorer.}
+A single scorer, \emph{shared across all nodes and levels}, produces the $8$-way
+categorical at every expanded node. Its $8$ queries are built from the geometry of
+the node's children: for each child we take its offset from the parent cell
+centre as a rotation vector, normalized by the characteristic cell size
+$(\,\Vso/N(l)\,)^{1/3}$ at that level; we Fourier-encode this $3$-D offset and the
+flattened $9$-D parent rotation (positional encoding with $n_\text{freq}=3$,
+following~\cite{mildenhall2020nerf}); we concatenate the two and add a learned level embedding.
+These $8$ queries cross-attend to the same patch tokens through an identical
+two-layer, eight-head block and are projected and log-softmaxed to $\log\pi_n$.
+Sharing the scorer across levels keeps the parameter count independent of depth
+$L$ and lets the same conditioning generalize across resolutions. The output
+linear layers of both scorers are zero-initialized, so every categorical starts
+uniform and training begins exactly at the $-\ln\Vso$ floor.
+
+\subsection{Training}
+\label{sec:training}
+
+We train by maximum likelihood of the \emph{single} rendered ground-truth
+rotation, exactly as in IPDF---no symmetry annotations and no equivalent set are
+used at training time, since that would give our model information the baselines
+lack. For a training pair $(I, R)$ we compute the path of $R$ at level $L$ and
+minimize the negative log-likelihood
+\begin{equation}
+  \mathcal{L} \;=\; -\Big(\log\pi_0[c_0] + \sum_{l=1}^{L}\log\pi_{n_{l-1}}[c_l]\Big),
+  \label{eq:loss}
+\end{equation}
+i.e.\ $-\log P$ from \cref{eq:treeprob}; the constant $\ln(N/\Vso)$ is added back
+only for reporting. Only the $L{+}1$ nodes on the ground-truth path are scored
+per image, so the backward pass is $O(L)$.
+
+\paragraph{Optimization.}
+We train end to end in fp32 (the finest cells are too small for bf16) with
+AdamW~\cite{loshchilov2019adamw} (weight decay $0.05$), learning rate $10^{-4}$ for the head and
+$10^{-5}$ for the backbone, a one-cycle schedule~\cite{smith2019onecycle} with $5\%$ warmup,
+batch size $64$, gradient clipping at $1.0$, for $60$k steps. The data pipeline
+precomputes each sample's path and the per-child geometry the scorer consumes, so
+the network never touches the grid library at train time.
+
+\paragraph{Exact in-plane roll augmentation.}
+\label{sec:aug}
+Single--ground-truth training has a failure mode that is specific to symmetric
+objects. The $K$ symmetric copies of a pose are indistinguishable from the image,
+so no model can place its mass on the \emph{particular} copy that was rendered
+from the image alone; the single-rotation likelihood is therefore bounded, and a
+model that appears to beat that bound on the training set can only have memorized
+which copy each training view was paired with. Empirically this is exactly what
+happens: the held-out likelihood peaks and then degrades as training proceeds
+(\cref{tab:abl-steps}), worst on the high-order symmetries.
+We remove it with an augmentation that is \emph{exact}, not approximate. SYMSOL
+views are centred, rendered on a uniform background with the object inside the
+inscribed circle, so rotating the image in-plane by an angle $\theta$ about its
+centre is identical to rolling the camera about its optical axis---a rigid
+transform of the pose. The rolled frame is thus a genuine, correctly labelled
+render whose ground-truth rotation is $R_z(-\theta)\,R$ (the sign and axis are
+fixed empirically by scoring the four candidates $R_z(\pm\theta)R$,
+$R\,R_z(\pm\theta)$ under a trained model and keeping the one that preserves the
+likelihood). We draw $\theta\sim\mathcal{U}[0,2\pi)$ per sample in the data
+loader, roll the frame---filling the exposed corners with the background
+colour---and recompute the path of $R_z(-\theta)\,R$ on the fly. This preserves
+the single-GT rule exactly (one rotation per image, merely relabelled) while
+making almost every view unique, so there is no fixed copy assignment left to
+memorize. The relabel is a cell-size--normalized transform of the shared
+scorer's inputs, which is also why a model trained at one grid level transfers to
+a finer level with no retraining (\cref{tab:abl-depth}).
+
+\subsection{Decoding a MAP rotation}
+\label{sec:decode}
+
+For the point-estimate metric we recover an approximate MAP rotation by a
+top-down beam search over the tree. We keep the top-$b$ coarsest cells by
+$\log\pi_0$, expand each to its $8$ children, score them with the shared child
+scorer, keep the top-$b$ of the resulting cells by cumulative log-probability,
+and repeat to level $L$; the highest-scoring leaf's cell-centre rotation is the
+estimate. We use beam width $b=8$. Because scoring is exact and the tree is
+strict, this visits only $O(bL)$ nodes.
+
+\subsection{Instantiation~II: \texorpdfstring{$\SEthree$}{SE(3)}}
+\label{sec:se3}
+
+$\SEthree$ is unbounded in translation, so a strict equivolumetric partition
+requires a bounded translation box. We take the Cartesian product of the rotation
+tree of \cref{sec:grid} with an equivolumetric octree over that box, exactly as the
+general framework of \cref{sec:framework} prescribes; the tree-softmax, the $O(L)$
+path likelihood and the beam decoder carry over unchanged.
+
+\paragraph{Translation octree.}
+Following SpyroPose~\cite{haugaard2023spyropose}, we parameterize the box by an
+affine map of a normalized unit cube $g\in[-\tfrac12,\tfrac12]^3$ into the camera
+frame, $t = \hat{t} + A\,g$, where $\hat{t}$ is a coarse position estimate (from a
+detector) and $A$ encodes the extent (in-plane $\sim\!d$ for an object of diameter
+$d$, enlarged along the view direction to absorb depth ambiguity). The octree
+subdivides the cube into the regular $2^{l}\!\times\!2^{l}\!\times\!2^{l}$ grid,
+$N_{\text{trans}}(l)=8^{l}$ cells; because $g\mapsto\hat{t}+Ag$ is affine it
+preserves equal volume, so every translation cell has volume
+$|\!\det A|/8^{l}$ and the box has volume $V_{\text{box}}=|\!\det A|$.
+
+\paragraph{Product tree.}
+A joint cell factorizes into a rotation path and a translation path. The rotation
+root supplies the level-$0$ categorical over $72$ cells (the translation root is a
+single cell); at each subsequent level a node has the full $b{=}64$ product of its
+$8$ rotation children and $8$ translation octants, with child index
+$c_{\text{rot}}\!\cdot\!8+c_{\text{oct}}$, until one half reaches its depth, after
+which the node is $8$-way---so the rotation and translation depths $L_r,L_t$ are
+independent and can be tuned to the degrees-versus-millimetres precision each needs.
+Using the \emph{joint} $64$-way categorical rather than independent rotation and
+translation softmaxes lets the model couple apparent rotation and translation,
+which perspective makes dependent. The grid has
+$N=72\cdot 8^{L_r}\cdot 8^{L_t}$ cells and the density is
+\begin{equation}
+  p(R,t) \;=\; P\big(\mathrm{cell}(R,t)\big)\cdot
+  \frac{N}{\Vso\cdot V_{\text{box}}},
+  \label{eq:se3density}
+\end{equation}
+so a uniform predictor scores $-\ln(\Vso\,V_{\text{box}})$ at every level; we verify
+this identity numerically to machine precision, together with octree
+cell/path round-trips and the equality of the tree-softmax with the flat joint
+categorical, as a data-free self-test of the $\SEthree$ construction
+(\cref{sec:supp-se3}). A pose whose translation leaves the box has zero density and
+infinite NLL, so the box must be sized conservatively from the detection and the
+in-box coverage reported; this is the one place the method depends on an external
+detector, as in~\cite{haugaard2023spyropose}. The same cross-attention head
+(\cref{sec:head}) realizes both instances---the child scorer simply emits up to
+$64$-way logits---so training (\cref{sec:training}) and decoding (\cref{sec:decode})
+are identical across $\SOthree$ and $\SEthree$.

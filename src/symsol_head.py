@@ -94,6 +94,23 @@ class SymsolDensityHead(nn.Module):
             lp = lp + clp.gather(1, child_idx[:, l:l + 1]).squeeze(1)
         return lp
 
+    def path_terms(self, patches, cell0, child_idx, child_off, parent_enc, level):
+        """Per-level decomposition of log P(finest cell): the level-0 term and each child level's term, kept separate
+        so a diagnostic can see where probability mass is lost. Returns (t0 (B,), tc (B,level), rank (B,level),
+        ent (B,level)): t0 + tc.sum(-1) == path_loglik; rank is the picked child's rank among its 8 siblings
+        (0 = argmax); ent is the full 8-way child-distribution entropy at each node (ln 8 = 2.08 => uniform / not yet
+        refined, 0 => a confident delta). The ent trajectory separates undertrained-diffuse from collapsed-sharp."""
+        t0 = self.logp0(patches).gather(1, cell0[:, None]).squeeze(1)                # (B,)
+        tc = patches.new_empty((patches.shape[0], level))
+        rank = torch.empty((patches.shape[0], level), dtype=torch.long, device=patches.device)
+        ent = patches.new_empty((patches.shape[0], level))
+        for l in range(level):
+            clp = self.child_logp(patches, child_off[:, l], parent_enc[:, l], l)      # (B,8) log-softmax
+            tc[:, l] = clp.gather(1, child_idx[:, l:l + 1]).squeeze(1)
+            rank[:, l] = (clp > clp.gather(1, child_idx[:, l:l + 1])).sum(1)           # 0 = picked child is the argmax
+            ent[:, l] = -(clp.exp() * clp).sum(1)                                     # entropy of the 8-way dist
+        return t0, tc, rank, ent
+
     def forward(self, patches, batch, level):
         """Training NLL of the single GT rotation. batch holds cell0/child_idx/child_off/parent_enc (see symsol_data).
         Returns (loss, logp_cell) with logp_cell detached for logging."""

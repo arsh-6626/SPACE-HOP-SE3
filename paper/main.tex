@@ -1,0 +1,51 @@
+% CVPR 2027 Paper; built on the CVPR author-kit (https://github.com/cvpr-org/author-kit)
+
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+%%%%%%%%% PAPER TYPE  - PLEASE UPDATE FOR FINAL VERSION
+% \usepackage{cvpr}              % To produce the CAMERA-READY version
+\usepackage[review]{cvpr}      % To produce the REVIEW version
+% \usepackage[pagenumbers]{cvpr} % To force page numbers, e.g. for an arXiv version
+
+% Import additional packages in the preamble file, before hyperref
+\input{preamble}
+
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+
+%%%%%%%%% PAPER ID  - PLEASE UPDATE
+\def\paperID{*****} % *** Enter the Paper ID here
+\def\confName{CVPR}
+\def\confYear{2027}
+
+%%%%%%%%% TITLE
+\title{Exactly Normalized Pose Distributions by Construction:\\
+Hierarchical Partition Trees over \texorpdfstring{$\mathrm{SO}(3)$}{SO(3)} and \texorpdfstring{$\mathrm{SE}(3)$}{SE(3)}}
+
+%%%%%%%%% AUTHORS - anonymized for review
+\author{Anonymous \confName~submission\\
+Paper ID \paperID\\
+{\tt\small}
+}
+
+\begin{document}
+\maketitle
+\input{fig/teaser}
+\input{sec/0_abstract}
+\input{sec/1_intro}
+\input{sec/2_related}
+\input{sec/3_method}
+\input{sec/4_experiments}
+\input{sec/5_conclusion}
+{
+    \small
+    \bibliographystyle{ieeenat_fullname}
+    \bibliography{main}
+}
+
+% WARNING: delete the supplementary pages from the main submission; compile X_suppl separately.
+\clearpage
+\appendix
+\input{sec/X_suppl}
+
+\end{document}

@@ -1,0 +1,52 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented \method{}, a general framework for pose distributions that are
+exactly normalized by construction: a tree-structured softmax over any strict
+hierarchical equivolumetric partition of a pose group yields a non-parametric
+distribution whose log-likelihood at any pose is read off in closed form from a
+single root-to-leaf path, with no retrieval grid and no sampled partition
+function. We instantiated it on $\SOthree$ via the Hopf--HEALPix tree and on
+$\SEthree$ via the Cartesian product of that tree with a bounded equivolumetric
+translation octree; a single light cross-attention head on a vision transformer
+realizes both, trained by single-ground-truth maximum likelihood with an $O(bL)$
+beam-search MAP decoder.
+
+On SYMSOL~I a single joint model attains $7.71$ average log-likelihood, above the
+strongest RGB-only baseline ($7.33$, trained per shape), while evaluating any
+rotation's exact likelihood in seven node scorings instead of scoring a
+million-cell grid. The construction is strongest exactly where normalization is
+usually most expensive---it comes within about a nat of the discretization ceiling on
+the continuous shapes (cone, cylinder) and resolves the low-order discrete
+symmetries well---and it is weakest on the high-order icosahedral object, whose
+sixty equivalent modes must receive mass simultaneously from single-rotation
+supervision. The efficiency and the remaining gap share one root cause: an
+exactly normalized tree makes every path cheap but asks the model to distribute
+probability consistently across many independent paths, which is the hard part of
+high-order ambiguity.
+
+\paragraph{Limitations and future work.}
+Three limitations bound the present results. (i)~Covering many well-separated modes
+requires splitting probability mass consistently across independent root-to-leaf
+paths; this is where single-ground-truth maximum likelihood hurts most, and it is the
+direct cause of the weaker icosahedral numbers. (ii)~The piecewise-constant density
+caps the attainable log-likelihood at the discretization ceiling of
+\cref{tab:ceiling}, so headroom on the discrete shapes is a resolution limit as
+much as a modeling one. (iii)~The $\SEthree$ instantiation of \cref{sec:se3} is
+fully constructed and numerically verified---its uniform predictor scores the
+exact $-\ln(\pi^2 V_{\mathrm{box}})$ floor and its tree likelihood matches the
+flat per-cell categorical to machine precision---but its evaluation on the
+real-image benchmarks T-LESS and YCB-Video (\cref{sec:se3results}), together with
+the SYMSOL~II marked-shape evaluation, is the current frontier rather than a
+reported result. Carrying the verified $\SEthree$ construction through training
+and evaluation on T-LESS and YCB-Video under the BOP protocol is the main
+direction we are pursuing.
+
+\paragraph{Reproducibility.}
+The construction admits an exact self-test: a uniform (zero-initialized) predictor
+scores average log-likelihood $-\ln\Vso\approx-2.29$ on $\SOthree$ at \emph{every}
+level---and, for the $\SEthree$ instance, $-\ln(\pi^2 V_{\mathrm{box}})$---which we
+verify numerically before training. The grid is the \textsc{nested} Hopf--HEALPix
+partition with $N(L)=72\cdot 8^{L}$ cells (\cref{sec:grid}), fully determined by
+$L$; evaluation uses the published SYMSOL \texttt{tfds} release. Code and the
+preprocessing pipeline will be released on acceptance.

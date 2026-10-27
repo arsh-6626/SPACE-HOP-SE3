@@ -1,0 +1,20 @@
+% Teaser figure (placeholder). Replace the framebox with the final rendered figure:
+%   (a) input image -> (b) coarse level-0 distribution over 72 cells ->
+%   (c) refined distribution at level L on SO(3) (Hopf/Mollweide viz) with GT symmetry set.
+\begin{strip}
+  \centering
+  \fbox{\parbox[c][0.26\textheight][c]{0.96\textwidth}{\centering
+      \textbf{[TEASER PLACEHOLDER]}\\[0.4em]
+      Input image $\rightarrow$ coarse categorical over the $72$ level-$0$ cells
+      $\rightarrow$ top-down refinement down the strict Hopf--HEALPix tree
+      $\rightarrow$ exactly normalized density on $\SOthree$.\\
+      Overlay the ground-truth symmetry set; contrast a continuous-symmetry shape
+      (cone/cylinder) with a high-order discrete one (icosahedron).}}
+  \captionof{figure}{\textbf{\method{} estimates a pose distribution without a retrieval
+  grid or a sampled partition function.} The distribution is a tree-structured softmax over a
+  strict hierarchical equivolumetric partition of a pose group; the log-likelihood of any
+  pose is read off by scoring only the $L{+}1$ nodes on its path. We instantiate the
+  framework on $\SOthree$ (shown) and on $\SEthree$.
+  \TODO{replace with final figure}}
+  \label{fig:teaser}
+\end{strip}

@@ -1,0 +1,295 @@
+\clearpage
+\setcounter{page}{1}
+\maketitlesupplementary
+
+% ==========================================================================
+% Appendix / Supplementary material.
+% Compiled together with the main paper; delete these pages from the main
+% submission PDF and/or submit separately per the CVPR instructions.
+% ==========================================================================
+
+\noindent This supplementary provides the grid construction and its exact
+self-test (\cref{sec:supp-grid}), full architecture and training details for
+reproducibility (\cref{sec:supp-arch,sec:supp-train}), the decoding procedure
+(\cref{sec:supp-decode}), additional results and visualizations
+(\cref{sec:supp-results}), and the planned $\SEthree$ extension
+(\cref{sec:supp-se3}).
+
+\section{Grid construction and self-test}
+\label{sec:supp-grid}
+
+\paragraph{Hopf--HEALPix cells.}
+A cell at level $l$ is indexed by a flat integer $c = \textit{pix}\cdot n_r(l) +
+\textit{roll}$, where $\textit{pix}\in\{0,\dots,12\,\textit{nside}^2-1\}$ is a
+HEALPix pixel in the \textsc{nested} scheme and $\textit{roll}\in\{0,\dots,
+n_r(l)-1\}$ with $n_r(l)=6\,\textit{nside}$ and $\textit{nside}=2^{l}$. The
+cell-centre rotation is the Hopf lift of the base point
+$(\theta,\phi)=\textsc{pix2ang}(\textit{nside},\textit{pix})$ and fibre angle
+$\psi=(\textit{roll}+\tfrac12)\cdot 2\pi/n_r(l)$, giving the ZYZ-Euler rotation
+$R=R_z(\phi)R_y(\theta)R_z(\psi)$. The inverse (rotation $\rightarrow$ cell) reads
+the base point from $R\hat{z}$ and recovers $\psi$ after removing it; both maps are
+exact inverses on cell centres.
+
+\paragraph{Strict child structure.}
+In the \textsc{nested} scheme a pixel's four children are $\textit{pix}\cdot4+\{0,
+1,2,3\}$ and a fibre bin's two children are $\textit{roll}\cdot2+\{0,1\}$, so a
+cell's eight children are indexed by $\textit{child}=\textit{s2child}\cdot2+
+\textit{rollchild}$. Hence the path $(c_0,c_1,\dots,c_L)$ with $c_0\in\{0,\dots,
+71\}$ and $c_l\in\{0,\dots,7\}$ uniquely identifies a finest cell, and the parent
+and the eight children of any node are computed in closed form.
+
+\paragraph{Self-test.}
+The whole likelihood path is verified independent of any training: (i)~the
+cell$\rightarrow$centre$\rightarrow$cell round trip is exact at every level;
+(ii)~decomposing a flat cell into $(c_0,\text{children})$ and recomposing returns
+the same cell; and (iii)~a uniform predictor ($\pi_0$ and all $\pi_n$ uniform)
+yields average log-likelihood exactly $-\ln\Vso \approx -2.2899$ nats at every
+level $0$--$L$, matching \cref{eq:density}. \TODO{optionally report the measured
+maximum deviation of the uniform self-test.}
+
+\section{Architecture details}
+\label{sec:supp-arch}
+
+\paragraph{Backbone.}
+ViT-B/16 (\texttt{vit\_base\_patch16\_224.\allowbreak augreg2\_in21k\_ft\_in1k})~\cite{dosovitskiy2021vit,wightman2019timm},
+$224\times224$ input, ImageNet mean/std normalization. We take the
+\texttt{forward\_features} patch tokens and drop the prefix (CLS/register) tokens,
+giving $P{=}196$ tokens of dimension $D{=}768$.
+
+\paragraph{Cross-attention blocks.}
+Both the level-0 scorer and the shared child scorer use the same block: queries
+are layer-normed and cross-attend (8 heads) to layer-normed patch tokens
+(key/value), followed by a residual MLP with hidden width $4D$ and GELU; two such
+layers; a final LayerNorm and linear-to-$1$ projection. The projection weight and
+bias are zero-initialized, so each scorer outputs the uniform log-categorical at
+initialization.
+
+\paragraph{Queries.}
+The level-0 scorer uses $72$ learned query embeddings. The child scorer builds its
+$8$ queries from, for each child $j$: the child's offset from the parent centre as
+a rotation vector $\in\RR^3$ normalized by $(\Vso/N(l))^{1/3}$, and the flattened
+parent rotation $\in\RR^9$; each is Fourier-encoded with $n_\text{freq}{=}3$
+(frequencies $\pi\cdot2^k$, sines and cosines, plus the raw value), concatenated,
+linearly projected to $\RR^{D}$ through a 2-layer GELU MLP, and summed with a
+learned per-level embedding.
+
+\paragraph{Parameter count.}
+The ViT-B/16 backbone accounts for $85.8$M parameters and the cross-attention
+tree head for $29.1$M, for $114.9$M in total. The head count is independent of the
+grid depth $L$, since a single scorer is shared across all nodes and levels.
+
+\section{Training details}
+\label{sec:supp-train}
+
+\begin{table}[h]
+\centering
+\caption{Training hyperparameters.}
+\label{tab:supp-hparams}
+\small
+\begin{tabular}{l l}
+\toprule
+optimizer & AdamW~\cite{loshchilov2019adamw}, weight decay $0.05$ \\
+learning rate (head / backbone) & $10^{-4}$ / $10^{-5}$ \\
+schedule & one-cycle~\cite{smith2019onecycle}, $5\%$ warmup \\
+batch size & $64$ \\
+training steps & $60\mathrm{k}$ \\
+gradient clip & $1.0$ \\
+precision & fp32 (gradient checkpointing) \\
+augmentation & in-plane roll (\cref{sec:aug}) \\
+level $L$ (main/abl.) & $6$/$5$ \\
+beam width (eval) & $8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Training minimizes the single-rotation NLL of \cref{eq:loss}; no symmetry
+annotations and no equivalent sets are used at training time. The data pipeline
+precomputes, per sample, the ground-truth path and the per-child geometry (offsets
+and parent rotations) so the network never calls the grid library during training.
+Dumping the dataset at level $6$ and slicing paths to the desired $L$ exploits the
+prefix property of the tree, so all depth ablations reuse one dump. All runs use a
+single RTX~6000~Ada (48\,GB) shared with other resident jobs; the headline $L{=}6$
+model completes its $60$k steps (plus the final test eval and per-level decompose)
+in about $12$ hours end to end, i.e.\ $\approx\!1.4$ steps/s at batch size $64$.
+
+\section{Decoding}
+\label{sec:supp-decode}
+
+Beam-MAP proceeds top-down: keep the top-$b$ level-0 cells by $\log\pi_0$; at each
+level expand every kept cell to its $8$ children, score them with the shared child
+scorer, form cumulative log-probabilities, and keep the top-$b$ cells overall;
+after level $L$, return the cell-centre rotation of the highest-scoring leaf. Total
+node scorings $O(bL)$. \TODO{report sensitivity of pose accuracy to $b$
+(cross-ref \cref{tab:abl-misc}).}
+
+\section{Additional results}
+\label{sec:supp-results}
+
+\paragraph{Per-shape learning curves.}
+\TODO{figure: training NLL and held-out average log-likelihood vs.\ steps, per
+shape; expected to show the discrete high-symmetry shapes lagging.}
+
+\paragraph{Qualitative distributions.}
+\TODO{figure: predicted $\SOthree$ distributions (Hopf/Mollweide visualization)
+for one example per shape, with the ground-truth symmetry set overlaid;
+contrast cone/cylinder (continuous) with icosahedron (60 discrete modes).}
+
+\paragraph{Per-level breakdown.}
+\cref{tab:supp-perlevel} reports the average log-likelihood decomposed by the
+contribution of each tree level (how much log-probability each level adds along the
+ground-truth path, on $500$ test images/shape from the headline $L{=}6$ model), to
+localize where mass is lost. The path log-likelihood is the row sum plus the
+density constant $\ln(N/\Vso)=14.46$. Two patterns stand out. The coarsest level
+$\ell_0$ carries by far the largest penalty for the high-symmetry shapes
+($-4.00$ for icosa, $-3.23$ for cube) because the top-level categorical must divide
+mass among the many occupied cells of a large symmetry set, whereas the continuous
+shapes pay least there ($-1.80$/$-2.50$ for cone/cyl). At the \emph{finest} levels,
+icosa again pays the most ($-1.21$, $-1.57$ at $\ell_5,\ell_6$ versus $-0.73$,
+$-1.06$ for tet and $-0.54$, $-0.90$ for cube), i.e.\ its per-mode peaks stay broad
+down to the grid floor---the same effect that drives its weaker point accuracy
+(\cref{sec:pose}).
+
+\begin{table}[h]
+\centering
+\caption{Per-level contribution to the ground-truth path log-probability
+(SYMSOL~I, headline $L{=}6$ model, $500$ images/shape). $\ell_0$ is the coarsest
+categorical; $\ell_1\!-\!\ell_6$ are the per-child categoricals. Row sum plus
+$\ln(N/\Vso)=14.46$ equals the path log-likelihood.}
+\label{tab:supp-perlevel}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l ccccccc}
+\toprule
+Shape & $\ell_0$ & $\ell_1$ & $\ell_2$ & $\ell_3$ & $\ell_4$ & $\ell_5$ & $\ell_6$ \\
+\midrule
+tet.  & $-2.54$ & $-0.12$ & $-0.11$ & $-0.28$ & $-0.49$ & $-0.73$ & $-1.06$ \\
+cube  & $-3.23$ & $-0.11$ & $-0.07$ & $-0.19$ & $-0.37$ & $-0.54$ & $-0.90$ \\
+ico.  & $-4.00$ & $-0.44$ & $-0.15$ & $-0.44$ & $-0.90$ & $-1.21$ & $-1.57$ \\
+cone  & $-1.80$ & $-0.71$ & $-0.72$ & $-0.74$ & $-0.80$ & $-0.93$ & $-1.20$ \\
+cyl.  & $-2.50$ & $-0.71$ & $-0.72$ & $-0.73$ & $-0.78$ & $-0.91$ & $-1.03$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{SYMSOL~II data note.}
+The raw \texttt{symmetric\_solids} \texttt{tfds} release (v1.0.0) already contains
+all eight shapes---the three marked shapes sphereX, cylO and tetX in addition to
+the five SYMSOL~I shapes---with both the single \texttt{rotation} label and the
+full \texttt{rotations\_equivalent} set (train $8\times45\mathrm{k}$, test
+$8\times5\mathrm{k}$). Only our preprocessed path-dump was restricted to the five
+SYMSOL~I shapes. The three marked shapes have now been re-dumped and prepared at
+$L{=}6$ through the same path-precompute pipeline
+(\texttt{data/symsol\_II\_\{tetX,cylO,sphereX\}}, $45$k/$5$k train/test each);
+producing \cref{tab:symsol2} needs the three per-shape training runs (one model per
+marked shape, the prior-work protocol). Unlike SYMSOL~I, each marked-shape test
+image in this release carries a single ground-truth rotation---we verified
+$K{=}1$ for all $5{,}000$ test images of every marked shape (SYMSOL~I has
+$K{=}12$--$720$)---so the SYMSOL~II metric is log-likelihood at that single pose
+and no equivalent set enters evaluation.
+\TODO{Document the exact split and seed used for the per-shape runs.}
+
+\subsection{Additional ablations}
+\label{sec:supp-ablations}
+
+Beyond the depth, scorer-sharing/beam, and training-length ablations in the main
+paper (\cref{sec:ablations}), we set up three further ablations on SYMSOL~I,
+reported here as the runs complete.
+
+\paragraph{Backbone.}
+To isolate the distribution formulation from the encoder, we match the backbone to
+the baselines (\cref{tab:abl-backbone}); head and protocol are held fixed.
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Ablation: backbone.} Overall SYMSOL~I average log-likelihood with
+different image encoders (head and protocol fixed).}
+\label{tab:abl-backbone}
+\small
+\begin{tabular}{l c}
+\toprule
+Backbone & avg.\ log-lik. \\
+\midrule
+ResNet-50 & \pend \\
+ViT-B/16 (in21k$\rightarrow$in1k) & \pend \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Child-scorer conditioning.}
+The child scorer is conditioned on the normalized child offset, the Fourier-encoded
+parent rotation, and a level embedding. \cref{tab:abl-cond} removes each in turn.
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Ablation: child-scorer conditioning.} Overall SYMSOL~I average
+log-likelihood as conditioning components are removed.}
+\label{tab:abl-cond}
+\small
+\begin{tabular}{l c}
+\toprule
+Conditioning & avg.\ log-lik. \\
+\midrule
+full (offset + parent + level) & \pend \\
+\;\; $-$ child offset & \pend \\
+\;\; $-$ parent rotation & \pend \\
+\;\; $-$ level embedding & \pend \\
+\;\; $-$ Fourier encoding (raw inputs) & \pend \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Training objective.}
+A central claim is that the tree can be trained directly by exact maximum
+likelihood, rather than as an energy with a sampled partition function. Keeping the
+head fixed, \cref{tab:abl-obj} compares our tree-MLE objective against an InfoNCE
+objective with importance-sampled negatives drawn from the tree (the SpyroPose-style
+training), which SpyroPose reports trains more stably than a directly normalized
+likelihood.
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Ablation: training objective.} Same head and backbone; exact
+tree-MLE (ours) vs.\ an InfoNCE objective with tree-importance-sampled negatives.
+Overall SYMSOL~I average log-likelihood, and negatives scored per step.}
+\label{tab:abl-obj}
+\small
+\begin{tabular}{l c c}
+\toprule
+Objective & \#neg./step & avg.\ log-lik. \\
+\midrule
+InfoNCE + importance sampling & \pend & \pend \\
+exact tree-MLE (ours) & 0 & \pend \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{\texorpdfstring{$\SEthree$}{SE(3)} construction and self-tests}
+\label{sec:supp-se3}
+
+The $\SEthree$ grid of \cref{sec:se3} is implemented as a product of the
+rotation tree and a translation octree. The octree lives in a normalized unit cube
+$g\in[-\tfrac12,\tfrac12]^3$, subdivided into the regular
+$2^{l}\!\times\!2^{l}\!\times\!2^{l}$ grid; a cell is addressed by its integer
+coordinates and, equivalently, by an octant path (octant $=b_x{+}2b_y{+}4b_z$,
+most-significant bit first). The affine map $t=\hat{t}+Ag$ carries the cube into the
+camera frame; since it is affine it preserves equal volume, so $V_{\text{box}}=|\!\det A|$
+and each cell has volume $|\!\det A|/8^{l}$. A joint cell is the pair of a rotation
+path and a translation path, and its per-node categorical is the $64$-way product
+(child $=c_{\text{rot}}\!\cdot\!8+c_{\text{oct}}$) while both halves subdivide,
+$8$-way afterwards, giving independent depths $L_r,L_t$.
+
+Before any data or training we check four identities on the implementation.
+(i)~Octree cell$\to$centre$\to$cell is exact at every level.
+(ii)~A cell's octant path recomposes the same cell.
+(iii)~A uniform predictor yields average log-likelihood exactly
+$-\ln(\Vso\,V_{\text{box}})$ at every pair $(L_r,L_t)$, matching
+\cref{eq:se3density} (maximum deviation $\sim\!10^{-15}$ nats over a range of
+depths and a non-trivial affine box).
+(iv)~The tree-structured softmax of empirical per-node conditionals equals the flat
+empirical joint categorical to machine precision, confirming the factorization and
+the density constant end to end without a network.
+The box bounds come from a detection, as in~\cite{haugaard2023spyropose}; a pose
+whose translation falls outside the box has infinite NLL, so we report the in-box
+coverage rate alongside the likelihood.
+\TODO{Report T-LESS/YCB-V numbers (\cref{tab:tless,tab:ycbv}) and the training
+details for the $\SEthree$ head once the real-image runs complete.}

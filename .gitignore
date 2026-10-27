@@ -9,6 +9,10 @@ checkpoints/
 ISROGSAT12RDataset/
 data/
 dataset/
+
+# ISRO GSAT-12R material — NOT for publication
+presentation_isro/
+*_ISRO_*.pptx
 *.jpg
 !images/*.png
 
