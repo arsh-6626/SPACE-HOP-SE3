@@ -217,23 +217,26 @@ def _open_rgb(path):
     return Image.open(path).convert("RGB")
 
 
-def collate(batch):
-    """Build the head geometry for a batch via se3_head.build_geometry(R, g). Returns image + geometry + det_A."""
-    import torch
-    import se3_head as sh
-    mats = np.stack([b["R"].numpy() for b in batch])
-    gs = np.stack([b["g"].numpy() for b in batch])
-    L_rot = batch[0].get("_L_rot"); L_trans = batch[0].get("_L_trans")
-    geom = sh.build_geometry(mats, gs, collate.L_rot, collate.L_trans)
-    out = {"image": torch.stack([b["image"] for b in batch]),
-           "det_A": torch.tensor([b["det_A"] for b in batch], dtype=torch.float64),
-           "label": torch.tensor([b["label"] for b in batch]),
-           "cell0": torch.as_tensor(geom["cell0"]),
-           "levels": [{"kind": lv["kind"],
-                       "child_off6": torch.as_tensor(lv["child_off6"]),
-                       "parent12": torch.as_tensor(lv["parent12"]),
-                       "target": torch.as_tensor(lv["target"])} for lv in geom["levels"]]}
-    return out
+class Collate:
+    """Picklable batch collate (survives DataLoader workers): builds the head geometry via
+    se3_head.build_geometry(R, g) at a fixed (L_rot, L_trans). Returns image + geometry + per-instance det_A."""
+    def __init__(self, L_rot, L_trans):
+        self.L_rot, self.L_trans = L_rot, L_trans
+
+    def __call__(self, batch):
+        import torch
+        import se3_head as sh
+        mats = np.stack([b["R"].numpy() for b in batch])
+        gs = np.stack([b["g"].numpy() for b in batch])
+        geom = sh.build_geometry(mats, gs, self.L_rot, self.L_trans)
+        return {"image": torch.stack([b["image"] for b in batch]),
+                "det_A": torch.tensor([b["det_A"] for b in batch], dtype=torch.float64),
+                "label": torch.tensor([b["label"] for b in batch]),
+                "cell0": torch.as_tensor(geom["cell0"]),
+                "levels": [{"kind": lv["kind"],
+                            "child_off6": torch.as_tensor(lv["child_off6"]),
+                            "parent12": torch.as_tensor(lv["parent12"]),
+                            "target": torch.as_tensor(lv["target"])} for lv in geom["levels"]]}
 
 
 # ---------------------------------------------------------------- self-test: real-crop uniform floor ----
@@ -252,8 +255,7 @@ def check(root, cache, objs, L_rot=5, L_trans=5, n=24):
         ds = Tless(root, cache, "train_pbr", o, L_rot, L_trans, dmap[o], t_hat="jitter")
         idx = np.linspace(0, len(ds) - 1, min(n, len(ds))).astype(int)
         items = [ds[int(i)] for i in idx]
-        collate.L_rot, collate.L_trans = L_rot, L_trans
-        b = collate(items)
+        b = Collate(L_rot, L_trans)(items)
         head = sh.Se3DensityHead(embed_dim=128, L_rot=L_rot, L_trans=L_trans, n_layers=1, heads=4).to(device).eval()
         patches = torch.randn(len(items), 16, 128, device=device)
         lv = [{"child_off6": x["child_off6"].to(device), "parent12": x["parent12"].to(device),
