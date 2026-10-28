@@ -123,6 +123,51 @@ def map_pose(head, patches, L_rot, L_trans, A, t_hat, beam=64):
     return R_map, t_map, lp
 
 
+def _geo_deg(R_map, R_set):
+    """min geodesic angle (deg) between R_map (3,3) and any R in R_set (K,3,3)."""
+    tr = np.einsum('ij,kij->k', R_map, R_set)                                # trace(R_map^T R_k) = sum R_map*R_k
+    return float(np.degrees(np.arccos(np.clip((tr - 1.0) / 2.0, -1.0, 1.0))).min())
+
+
+# ---------------------------------------------------------------- SYMSOL-T pose-error eval ----
+
+@torch.no_grad()
+def eval_symsolt_pose(ckpt, geom_dir, n=None, beam=256, device=None):
+    """Beam-MAP pose error on SYMSOL-T test: min-geodesic rotation error (deg, over the symmetric equivalent set)
+    and translation L2 error (render units, box t in [-box_half,box_half]^3), per shape and overall."""
+    import se3_data as sd
+    from se3_train import TimmEncoder
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    ck = torch.load(ckpt, map_location=device, weights_only=False)
+    meta, ta = ck["meta"], ck["args"]
+    L_rot, L_trans, bh = meta["L_rot"], meta["L_trans"], meta["box_half"]
+    A = np.diag([2.0 * bh, 2.0 * bh, 2.0 * bh]); t_hat = np.zeros(3)
+    enc = TimmEncoder(ta["backbone"], ta["img_size"]).to(device).eval()
+    head = __import__("se3_head").Se3DensityHead(embed_dim=enc.embed_dim, L_rot=L_rot, L_trans=L_trans).to(device).eval()
+    enc.load_state_dict(ck["enc"]); head.load_state_dict(ck["head"])
+    ds = sd.make_dataset_class()(geom_dir, "test")
+    idx = range(len(ds)) if n is None else range(min(n, len(ds)))
+    per = {s: {"r": [], "t": []} for s in sd.SHAPE_NAMES}
+    for i in idx:
+        it = ds.test_item(i)
+        patches = enc(it["image"][None].to(device)).float()[0]
+        R_map, t_map, _ = map_pose(head, patches, L_rot, L_trans, A, t_hat, beam)
+        per[sd.SHAPE_NAMES[it["label"]]]["r"].append(_geo_deg(R_map, it["equiv_R"]))
+        per[sd.SHAPE_NAMES[it["label"]]]["t"].append(float(np.linalg.norm(t_map - it["t"])))
+    rows, allr, allt = [], [], []
+    for s in sd.SHAPE_NAMES:
+        if not per[s]["r"]:
+            continue
+        r, t = np.array(per[s]["r"]), np.array(per[s]["t"])
+        allr += per[s]["r"]; allt += per[s]["t"]
+        rows.append(f"  {s:5s} rot {r.mean():6.2f}deg (med {np.median(r):5.2f})  trans {t.mean():.4f}  (n={len(r)})")
+    allr, allt = np.array(allr), np.array(allt)
+    rows.append(f"  ALL   rot {allr.mean():6.2f}deg (med {np.median(allr):5.2f})  trans {allt.mean():.4f}  "
+                f"(n={len(allr)}, beam={beam}, L=({L_rot},{L_trans}))")
+    print("\n".join(rows), flush=True)
+    return allr.mean(), allt.mean()
+
+
 # ---------------------------------------------------------------- checks: beam == independent exhaustive ----
 
 @torch.no_grad()
@@ -180,8 +225,17 @@ def checks():
 
 
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) > 1 and sys.argv[1] == "checks":
         checks()
+    elif len(sys.argv) > 1 and sys.argv[1] == "posezeval":
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("posezeval")
+        ap.add_argument("--ckpt", required=True)
+        ap.add_argument("--geom", required=True)
+        ap.add_argument("--n", type=int, default=None)
+        ap.add_argument("--beam", type=int, default=256)
+        a = ap.parse_args()
+        eval_symsolt_pose(a.ckpt, a.geom, a.n, a.beam)
     else:
         print(__doc__)
