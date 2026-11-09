@@ -11,7 +11,7 @@ import os, sys, numpy as np, matplotlib, healpy as hp
 matplotlib.use("Agg")
 import matplotlib as mpl, matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Polygon
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
+from matplotlib.collections import LineCollection
 sys.path.insert(0, "src"); sys.path.insert(0, os.path.dirname(__file__))
 import _globe as G
 
@@ -96,29 +96,20 @@ ax.annotate("", xy=(0.62, 0.66), xytext=(-0.62, 0.66),
 ax.scatter([0], [0], s=16, c=INK, zorder=9)
 label(CX[0], "$SO(3)$", "rotations,\nHaar volume $\\pi^2$")
 
-# ---- panel 2: actual Hopf fibres (S^2 x S^1), stereographic ----
-axf = fig.add_axes([CX[1] - GW / 2 - 0.012, CY - GH / 2 + 0.035, GW + 0.024, GH - 0.01], projection="3d")
-SEL2 = (np.radians(58.0), np.radians(35.0)); CTX2 = [(np.radians(58.0), np.radians(a)) for a in (-50, 120)]
-for th, ph in CTX2:
-    Pc, _ = fibre_xyz(th, ph)
-    axf.plot(Pc[:, 0], Pc[:, 1], Pc[:, 2], color="#b4bcc6", lw=1.4, alpha=0.8, zorder=1)
-Ps, ts = fibre_xyz(*SEL2)
-seg = np.stack([Ps[:-1], Ps[1:]], 1); cols = HSV((ts[:-1] / (2 * np.pi)) % 1.0)
-axf.add_collection3d(Line3DCollection(seg, colors=cols, linewidths=4.6, zorder=5))
-psi = (2 + 0.5) * 2 * np.pi / 6                                   # one chosen roll bin -> gold point on the fibre
-qa = np.cos(SEL2[0] / 2) * np.cos(psi); qb = np.cos(SEL2[0] / 2) * np.sin(psi)
-qc = np.sin(SEL2[0] / 2) * np.cos(psi + SEL2[1]); qd = np.sin(SEL2[0] / 2) * np.sin(psi + SEL2[1])
-qs = 1.0 / (1.0 - qd); qpt = np.array([qa * qs, qb * qs, qc * qs])
-axf.scatter([qpt[0]], [qpt[1]], [qpt[2]], s=110, c=GOLD, edgecolors=GOLD_LINE, linewidths=1.4, zorder=9)
-c2 = (Ps.min(0) + Ps.max(0)) / 2; r2 = 0.60 * (Ps.max(0) - Ps.min(0)).max()   # frame the selected fibre
-axf.set_xlim(c2[0] - r2, c2[0] + r2); axf.set_ylim(c2[1] - r2, c2[1] + r2); axf.set_zlim(c2[2] - r2, c2[2] + r2)
-axf.set_box_aspect((1, 1, 1))
-_n = np.linalg.svd(Ps - Ps.mean(0))[2][2]                        # selected-fibre plane normal -> open view
-axf.view_init(elev=float(np.degrees(np.arcsin(np.clip(_n[2], -1, 1)))) - 18, azim=float(np.degrees(np.arctan2(_n[1], _n[0]))))
-axf.set_xticks([]); axf.set_yticks([]); axf.set_zticks([]); axf.grid(False)
-for pane in (axf.xaxis, axf.yaxis, axf.zaxis):
-    pane.set_pane_color((1, 1, 1, 0)); pane.line.set_color((1, 1, 1, 0))
-label(CX[1], "$S^2 \\times S^1$", "actual Hopf fibres\n(roll $\\psi$ along the fibre)")
+# ---- panel 2: the actual Hopf fibre drawn ON the same globe ----
+ax = sphere(CX[1]); limb(ax)
+th0 = float(np.arccos(np.clip(base[2], -1, 1)))                   # base point (theta, phi) of the followed pixel
+ph0 = float(np.arctan2(-base[1], base[0]))
+bxy, _ = G.project(R, base[None]); bx, by = float(bxy[0, 0]), float(bxy[0, 1])
+Ps, ts = fibre_xyz(th0, ph0)                                      # actual Hopf fibre, projected with the globe view
+fp = (Ps @ R.T)[:, :2]; fp = fp - fp.mean(0)
+fp = fp * (0.40 / np.abs(fp).max()) + np.array([bx, by])          # sit it on the globe at the base point
+segs = np.stack([fp[:-1], fp[1:]], 1)
+ax.add_collection(LineCollection(segs, colors=HSV((ts[:-1] / (2 * np.pi)) % 1.0), linewidths=4.6, zorder=6))
+rb = 2; idx = int(np.argmin(np.abs((ts - (rb + 0.5) * 2 * np.pi / 6 + np.pi) % (2 * np.pi) - np.pi)))
+ax.scatter([bx], [by], s=30, c=INK, zorder=7)                     # the base point
+ax.scatter([fp[idx, 0]], [fp[idx, 1]], s=95, c=GOLD, edgecolors=GOLD_LINE, linewidths=1.3, zorder=8)
+label(CX[1], "$S^2 \\times S^1$", "the actual Hopf fibre\n(roll $\\psi$ along it)")
 
 # ---- panel 3: HEALPix x roll ----
 ax = sphere(CX[2]); base_tiles(ax, fill=True); limb(ax)
