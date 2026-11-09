@@ -102,10 +102,16 @@ th0 = float(np.arccos(np.clip(base[2], -1, 1)))                   # base point (
 ph0 = float(np.arctan2(-base[1], base[0]))
 ctr = np.array([0.0, 0.03])                                      # draw it large and centred on the globe
 Ps, ts = fibre_xyz(th0, ph0)                                      # actual Hopf fibre, projected with the globe view
-fp = (Ps @ R.T)[:, :2]; fp = fp - fp.mean(0)
-fp = fp * (0.58 / np.abs(fp).max()) + ctr
-segs = np.stack([fp[:-1], fp[1:]], 1)
-ax.add_collection(LineCollection(segs, colors=HSV((ts[:-1] / (2 * np.pi)) % 1.0), linewidths=5.2, zorder=6))
+fp0 = (Ps @ R.T)[:, :2]; off = fp0.mean(0); scale = 0.52 / np.abs(fp0 - off).max()
+place = lambda P: ((P @ R.T)[:, :2] - off) * scale + ctr         # one common transform -> neighbours stay linked
+clip = Circle((0, 0), 1.0, transform=ax.transData, fill=False, lw=0); ax.add_patch(clip)
+for dth, dph in [(0.0, 0.95), (0.0, -0.85), (0.45, 0.30), (-0.45, -0.25)]:  # neighbour fibres (grey, linked)
+    g = place(fibre_xyz(th0 + dth, ph0 + dph)[0])
+    nc = LineCollection(np.stack([g[:-1], g[1:]], 1), colors="#aeb6c1", linewidths=1.7, alpha=0.9, zorder=4)
+    nc.set_clip_path(clip); ax.add_collection(nc)
+fp = place(Ps)                                                   # the selected fibre, coloured by roll
+lc = LineCollection(np.stack([fp[:-1], fp[1:]], 1), colors=HSV((ts[:-1] / (2 * np.pi)) % 1.0), linewidths=5.2, zorder=6)
+lc.set_clip_path(clip); ax.add_collection(lc)
 rb = 2; idx = int(np.argmin(np.abs((ts - (rb + 0.5) * 2 * np.pi / 6 + np.pi) % (2 * np.pi) - np.pi)))
 ax.scatter([ctr[0]], [ctr[1]], s=32, c=INK, zorder=7)            # the base point
 ax.scatter([fp[idx, 0]], [fp[idx, 1]], s=95, c=GOLD, edgecolors=GOLD_LINE, linewidths=1.3, zorder=8)
