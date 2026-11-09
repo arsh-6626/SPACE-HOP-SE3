@@ -1,0 +1,13 @@
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/hopf_fibre.pdf}
+  \caption{\textbf{Fibre selection via the actual Hopf fibres.} Under the Hopf fibration
+  $SO(3)\cong S^3$, every point of the base sphere $S^2$ lifts to a \emph{fibre}: a great circle of rotations that
+  share that base point and differ only by in-plane roll $\psi$. \textbf{Left:} choosing a HEALPix base point (gold)
+  selects which fibre. \textbf{Right:} the fibres themselves, stereographically projected from $S^3$ to
+  $\mathbb{R}^3$ (the characteristic linked circles); the selected fibre is drawn in full and coloured by the roll
+  $\psi$ (hue, as everywhere else), and the chosen roll bin is the gold point \emph{on} that circle. This is the
+  geometry the per-node roll dial summarizes: a NeST cell fixes a base point \emph{and} a position along its Hopf
+  fibre.}
+  \label{fig:hopf_fibre}
+\end{figure}

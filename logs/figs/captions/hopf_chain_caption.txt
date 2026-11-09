@@ -8,7 +8,8 @@
   \textbf{equivolumetric} cells of measure $\mu(\mathrm{cell})=\pi^2/N(\ell)$, indexed by
   $c=\mathrm{pix}\cdot n_{\mathrm{roll}}+\mathrm{roll}$. Doubling $N_{\mathrm{side}}$ splits each pixel into $4$
   (HEALPix NESTED) and each roll bin into $2$, an $\times8$ equivolumetric refinement giving the hierarchical tree
-  with $N(\ell)=72\cdot 8^{\ell}$ leaves. Every panel is a shaded $S^2$ globe in the same style as the decode-tree
-  figures; the followed cell is gold with its Hopf roll fibre ring.}
+  with $N(\ell)=72\cdot 8^{\ell}$ leaves. Panels are shaded $S^2$ globes in the decode-tree style, except the Hopf
+  step, which shows the \emph{actual} Hopf fibres stereographically projected from $S^3$ to $\mathbb{R}^3$ (coloured
+  by roll $\psi$, chosen roll in gold); the followed cell is gold throughout.}
   \label{fig:hopf_chain}
 \end{figure*}
