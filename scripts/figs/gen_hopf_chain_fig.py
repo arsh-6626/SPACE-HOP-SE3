@@ -100,14 +100,14 @@ label(CX[0], "$SO(3)$", "rotations,\nHaar volume $\\pi^2$")
 ax = sphere(CX[1]); limb(ax)
 th0 = float(np.arccos(np.clip(base[2], -1, 1)))                   # base point (theta, phi) of the followed pixel
 ph0 = float(np.arctan2(-base[1], base[0]))
-bxy, _ = G.project(R, base[None]); bx, by = float(bxy[0, 0]), float(bxy[0, 1])
+ctr = np.array([0.0, 0.03])                                      # draw it large and centred on the globe
 Ps, ts = fibre_xyz(th0, ph0)                                      # actual Hopf fibre, projected with the globe view
 fp = (Ps @ R.T)[:, :2]; fp = fp - fp.mean(0)
-fp = fp * (0.40 / np.abs(fp).max()) + np.array([bx, by])          # sit it on the globe at the base point
+fp = fp * (0.58 / np.abs(fp).max()) + ctr
 segs = np.stack([fp[:-1], fp[1:]], 1)
-ax.add_collection(LineCollection(segs, colors=HSV((ts[:-1] / (2 * np.pi)) % 1.0), linewidths=4.6, zorder=6))
+ax.add_collection(LineCollection(segs, colors=HSV((ts[:-1] / (2 * np.pi)) % 1.0), linewidths=5.2, zorder=6))
 rb = 2; idx = int(np.argmin(np.abs((ts - (rb + 0.5) * 2 * np.pi / 6 + np.pi) % (2 * np.pi) - np.pi)))
-ax.scatter([bx], [by], s=30, c=INK, zorder=7)                     # the base point
+ax.scatter([ctr[0]], [ctr[1]], s=32, c=INK, zorder=7)            # the base point
 ax.scatter([fp[idx, 0]], [fp[idx, 1]], s=95, c=GOLD, edgecolors=GOLD_LINE, linewidths=1.3, zorder=8)
 label(CX[1], "$S^2 \\times S^1$", "the actual Hopf fibre\n(roll $\\psi$ along it)")
 
