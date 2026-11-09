@@ -1,0 +1,15 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/octree_chain.pdf}
+  \caption{\textbf{The octree discretization of translation $\mathbb{R}^3$.} The translation factor of NeST, drawn as
+  a single construction chain to mirror the Hopf--HEALPix partition of $SO(3)$ (Fig.~\ref{fig:hopf_chain}). A
+  camera-frame translation $t$ is anchored and scaled, $t=\hat t + A\,g$ with $g\in[-1,1]^3$, into a bounded box
+  $[\hat t - A,\ \hat t + A]$ that forms the \textbf{octree root cell} (volume $V_0=8\det A$). Splitting each axis
+  gives $8$ octants $(\pm,\pm,\pm)$, each with exactly $\tfrac{1}{8}$ the parent volume, so the partition is
+  \textbf{equivolumetric by construction}; the octant containing $t$ (gold) is selected by its index $o$. Because the
+  octree is self-similar, the chosen octant subdivides into its own $8$ children ($A\!\to\!A/2$), an $\times8$
+  refinement giving the hierarchical tree with $N(\ell)=8^{\ell}$ equal-volume cells at level $\ell$. Together with
+  the $\times8$ rotation refinement this yields the $64$-way joint child of the SE(3) decode tree. Cubes are
+  isometric, in the decode-tree style; the followed cell is gold throughout.}
+  \label{fig:octree_chain}
+\end{figure*}
