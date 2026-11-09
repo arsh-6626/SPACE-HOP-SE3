@@ -114,8 +114,8 @@ def draw_cells(ax, R, nside, nr, cells, prob, chosen_cell, step=8, context=True,
             ax.add_patch(Polygon(poly, closed=True, fc="none", ec=GOLD_LINE, lw=2.4, zorder=5))
 
 
-def fibre_ring(ax, R, base_c, nr, chosen_roll, rad=0.30):
-    """Hopf roll S^1 drawn ON the globe at the chosen base point: a foreshortened hue ring, chosen psi in gold."""
+def fibre_ring(ax, R, base_c, nr, chosen_roll, rad=0.40, accent=GOLD_LINE, dot=GOLD, s=26.0):
+    """Hopf roll S^1 drawn ON the globe at the chosen base point: a bold foreshortened hue ring, chosen psi marked."""
     c = np.asarray(base_c, float); c = c / np.linalg.norm(c)
     t1 = np.cross(c, np.array([0.0, 0.0, 1.0]))
     if np.linalg.norm(t1) < 1e-6:
@@ -126,22 +126,25 @@ def fibre_ring(ax, R, base_c, nr, chosen_roll, rad=0.30):
     pts = c[None] + rad * (np.cos(aa)[:, None] * t1[None] + np.sin(aa)[:, None] * t2[None])
     xy, d = project(R, pts); vis = d > 0
     hues = [HSV(hue(int(a / (2 * np.pi) * nr) % nr, nr)) for a in aa]
-    ax.scatter(xy[vis, 0], xy[vis, 1], s=8.0, c=np.array(hues)[vis], zorder=4, linewidths=0)
+    ax.scatter(xy[vis, 0], xy[vis, 1], s=s, c=np.array(hues)[vis], zorder=5, linewidths=0.35,
+               edgecolors="white")
     psi = (int(chosen_roll) + 0.5) * 2 * np.pi / nr
     pc = c + rad * (np.cos(psi) * t1 + np.sin(psi) * t2)
     cxy, _ = project(R, c[None]); pxy, _ = project(R, pc[None])
-    ax.plot([cxy[0, 0], pxy[0, 0]], [cxy[0, 1], pxy[0, 1]], color=GOLD_LINE, lw=1.8, zorder=5)
-    ax.scatter([pxy[0, 0]], [pxy[0, 1]], s=34, c=GOLD, edgecolors=GOLD_LINE, linewidths=1.0, zorder=6)
+    ax.plot([cxy[0, 0], pxy[0, 0]], [cxy[0, 1], pxy[0, 1]], color=accent, lw=2.8, zorder=6,
+            solid_capstyle="round")
+    ax.scatter([pxy[0, 0]], [pxy[0, 1]], s=s * 2.6, c=dot, edgecolors=accent, linewidths=1.2, zorder=7)
 
 
 def globe(ax, R, nside, nr, cells, prob, chosen_cell, base_c=None, chosen_roll=None,
-          step=8, context=True, fibre=True, crop=None, frame=True):
+          step=8, context=True, fibre=True, crop=None, frame=True,
+          fibre_accent=GOLD_LINE, fibre_dot=GOLD, fibre_rad=0.40, fibre_s=26.0):
     """Full globe node. crop=(cx,cy,half) zooms the axis limits (for deep-level insets)."""
     shaded_disk(ax)
     graticule(ax, R)
     draw_cells(ax, R, nside, nr, cells, prob, chosen_cell, step=step, context=context)
     if fibre and base_c is not None and chosen_roll is not None:
-        fibre_ring(ax, R, base_c, nr, chosen_roll)
+        fibre_ring(ax, R, base_c, nr, chosen_roll, rad=fibre_rad, accent=fibre_accent, dot=fibre_dot, s=fibre_s)
     ax.add_patch(Circle((0, 0), 1.0, fill=False, ec="#8f97a2", lw=1.1, zorder=6))
     if crop is None:
         ax.set_xlim(-1.16, 1.16); ax.set_ylim(-1.16, 1.16)

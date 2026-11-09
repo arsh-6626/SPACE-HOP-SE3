@@ -57,11 +57,13 @@ row_y = [0.672, 0.486, 0.300]; col_x = np.linspace(0.105, 0.975, 8)
 NW, NH = 0.108, 0.108
 
 
-def node_at(cx, cy, w, h, nside, nr, cells, prob, gold_cell, focus_cell, draw_fibre):
+def node_at(cx, cy, w, h, nside, nr, cells, prob, gold_cell, focus_cell, is_map):
     ax = fig.add_axes([cx - w / 2, cy - h / 2, w, h])
     base_c = np.array(hp.pix2vec(nside, int(focus_cell) // nr, nest=True))
+    acc, dotc, s, rad = (GOLD_LINE, GOLD, 30.0, 0.42) if is_map else ("#333333", "#333333", 12.0, 0.32)
     G.globe(ax, R, nside, nr, cells, prob, (gold_cell if gold_cell is not None else -1),
-            base_c=base_c, chosen_roll=int(focus_cell) % nr, fibre=draw_fibre, frame=False)
+            base_c=base_c, chosen_roll=int(focus_cell) % nr, fibre=True, frame=False,
+            fibre_accent=acc, fibre_dot=dotc, fibre_s=s, fibre_rad=rad)
 
 
 def globe_zoom(ax, nside, nr, cell, prob):
@@ -150,12 +152,12 @@ for j, r in enumerate(lv):
     for k in range(8):
         xc = col_x[k]; is_ch = (k == r["rc"]); p = float(r["rotp"][k]); cell = int(r["chf"][k])
         bg.plot([px, xc], [py - (ROOT_H if j == 0 else NH) / 2 - 0.002, yc + NH / 2 + 0.002],
-                color=(GOLD_LINE if is_ch else GREY), lw=(1.0 + 5.0 * float(jointp[j]) if is_ch else 0.5),
-                alpha=(0.95 if is_ch else 0.3), zorder=(4 if is_ch else 0))
+                color=(GOLD_LINE if is_ch else "#7b838d"), lw=(2.6 + 6.0 * float(jointp[j]) if is_ch else 1.4),
+                alpha=(0.97 if is_ch else 0.55), zorder=(5 if is_ch else 1), solid_capstyle="round")
         node_at(xc, yc, NW, NH, nside, nr, np.array([cell]), np.array([p]),
                 cell if is_ch else None, cell, is_ch)
-        roll_dial(xc, yc - 0.066, 0.020, nr, cell % nr)
-        bg.text(xc, yc - 0.092, f"rot $p={p:.2f}$", ha="center", va="top", fontsize=9.5,
+        roll_dial(xc, yc - 0.064, 0.023, nr, cell % nr)
+        bg.text(xc, yc - 0.094, f"rot $p={p:.2f}$", ha="center", va="top", fontsize=9.5,
                 color=(GOLD_LINE if is_ch else GREY), fontweight=("bold" if is_ch else "normal"))
     # translation octree cube beside the MAP node (the other factor of the 64-way joint)
     mapx = col_x[r["rc"]]; cbx = mapx - 0.064 if mapx > 0.85 else mapx + 0.064
