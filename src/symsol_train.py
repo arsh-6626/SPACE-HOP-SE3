@@ -21,52 +21,81 @@ import symsol_data as sd
 from symsol_head import SymsolDensityHead
 from hier_head import geodesic_deg
 
-SHAPE_NAMES = sd.SHAPE_NAMES
+SHAPE_NAMES = sd.SHAPE_NAMES_ALL    # 8 shapes so SYMSOL-II labels (5,6,7) index safely; SYMSOL-I labels 0-4 unaffected
 
 
 class TimmEncoder(nn.Module):
-    """ImageNet ViT-B/16 -> patch tokens (B, P, D). Register/CLS prefix tokens dropped."""
-    def __init__(self, name="vit_base_patch16_224.augreg2_in21k_ft_in1k", img_size=224, grad_ckpt=False):
+    """Image encoder -> patch/spatial tokens (B, P, D). ViT: forward_features, prefix tokens dropped. CNN (abl-backbone,
+    e.g. ResNet-50): forward_features gives (B,C,H,W) -> flattened to (B, H*W, C). `proj_dim` linearly projects tokens
+    to that width so the head stays byte-identical across backbones (the attr is kept named `vit` for state_dict
+    back-compat; proj is Identity by default so existing ViT checkpoints load unchanged)."""
+    def __init__(self, name="vit_base_patch16_224.augreg2_in21k_ft_in1k", img_size=224, grad_ckpt=False, proj_dim=None):
         super().__init__()
         import timm
-        self.vit = timm.create_model(name, pretrained=True, img_size=img_size, num_classes=0)
-        self.n_prefix = self.vit.num_prefix_tokens
-        self.embed_dim = self.vit.embed_dim
-        if grad_ckpt:
+        self.is_transformer = any(k in name.lower() for k in ("vit", "deit", "beit", "eva"))
+        if self.is_transformer:
+            self.vit = timm.create_model(name, pretrained=True, img_size=img_size, num_classes=0)
+            self.n_prefix = self.vit.num_prefix_tokens
+            feat_dim = self.vit.embed_dim
+        else:
+            self.vit = timm.create_model(name, pretrained=True, num_classes=0, global_pool="")
+            self.n_prefix = 0
+            feat_dim = self.vit.num_features
+        use_proj = bool(proj_dim) and proj_dim != feat_dim
+        self.proj = nn.Linear(feat_dim, proj_dim) if use_proj else nn.Identity()
+        self.embed_dim = proj_dim if use_proj else feat_dim
+        if grad_ckpt and hasattr(self.vit, "set_grad_checkpointing"):
             self.vit.set_grad_checkpointing(True)
 
     def forward(self, x):
-        return self.vit.forward_features(x)[:, self.n_prefix:]
+        f = self.vit.forward_features(x)
+        if f.dim() == 4:                                    # CNN: (B,C,H,W) -> (B, H*W, C)
+            f = f.flatten(2).transpose(1, 2)
+        else:                                               # transformer: (B, T, D) drop prefix
+            f = f[:, self.n_prefix:]
+        return self.proj(f)
 
 
 DENS = lambda L: float(np.log(g.n_cells(L) / g.V_SO3))     # log(N/V_SO3) density constant
 
 
-def build(level, backbone, img_size, device, grad_ckpt=False):
-    enc = TimmEncoder(backbone, img_size, grad_ckpt)
-    head = SymsolDensityHead(embed_dim=enc.embed_dim, max_level=level)
+def _cfg_from_args(d):
+    """Extract head conditioning/scorer toggles (abl-cond/abl-misc) and encoder proj width (abl-backbone) from an args
+    dict (live args or a saved ck['args']). Missing keys -> defaults == original architecture, so old ckpts load."""
+    head_kw = dict(use_offset=not d.get("no_offset", False), use_parent=not d.get("no_parent", False),
+                   use_level=not d.get("no_level", False), use_fourier=not d.get("no_fourier", False),
+                   per_level_scorer=d.get("per_level_scorer", False))
+    return head_kw, d.get("proj_dim", None)
+
+
+def build(level, backbone, img_size, device, grad_ckpt=False, head_kw=None, proj_dim=None):
+    enc = TimmEncoder(backbone, img_size, grad_ckpt, proj_dim=proj_dim)
+    head = SymsolDensityHead(embed_dim=enc.embed_dim, max_level=level, **(head_kw or {}))
     return enc.to(device), head.to(device)
 
 
 # ---------------------------------------------------------------- beam-MAP decode (rotation metric)
 
 @torch.no_grad()
-def beam_map(enc, head, images, level, beam=8, device="cuda"):
-    """Approx MAP rotation per image by top-down beam search over the tree. images (B,3,H,W) -> (B,3,3) np."""
+def beam_map(enc, head, images, level, beam=8, device="cuda", group_k=1):
+    """Approx MAP rotation per image by top-down beam search over the tree. images (B,3,H,W) -> (B,3,3) np.
+    group_k>1 (abl-arity): each beam step expands a super-level of width b=8**group_k over k base levels, so the tree
+    is Ls=level//group_k steps deep; the super-level index (0..Ls-1) is passed to child_logp for the level embedding."""
     patches = enc(images.to(device)).float()
     B = patches.shape[0]
+    b = 8 ** group_k
     logp0 = head.logp0(patches)                                   # (B,72)
     lp, nodes = torch.topk(logp0, min(beam, 72), dim=-1)          # (B,beam) logprob, (B,beam) level-0 cells
     nodes = nodes.cpu().numpy()
-    for l in range(level):
+    for j in range(level // group_k):
         nb = nodes.shape[1]
-        off_np, par_np, chf = sd.node_children_features(nodes.reshape(-1), l)       # (B*nb,8,3),(B*nb,9),(B*nb,8)
-        off = torch.from_numpy(off_np).to(device).view(B, nb, 8, 3)
+        off_np, par_np, chf = sd.node_children_features(nodes.reshape(-1), j * group_k, group_k)  # (B*nb,b,3),(B*nb,9),(B*nb,b)
+        off = torch.from_numpy(off_np).to(device).view(B, nb, b, 3)
         par = torch.from_numpy(par_np).to(device).view(B, nb, 9)
-        # score the 8 children of every beam node (flatten beam into batch)
-        clp = torch.stack([head.child_logp(patches, off[:, j], par[:, j], l) for j in range(nb)], 1)  # (B,nb,8)
-        total = lp[:, :, None] + clp                              # (B,nb,8)
-        child_cells = chf.reshape(B, nb, 8)
+        # score the b children of every beam node (flatten beam into batch); super-level index j -> level embedding
+        clp = torch.stack([head.child_logp(patches, off[:, m], par[:, m], j) for m in range(nb)], 1)  # (B,nb,b)
+        total = lp[:, :, None] + clp                              # (B,nb,b)
+        child_cells = chf.reshape(B, nb, b)
         flat = total.reshape(B, -1)
         k = min(beam, flat.shape[1])
         lp, sel = torch.topk(flat, k, dim=-1)                     # (B,k)
@@ -79,13 +108,13 @@ def beam_map(enc, head, images, level, beam=8, device="cuda"):
 # ---------------------------------------------------------------- eval
 
 @torch.no_grad()
-def evaluate(enc, head, root, level, device, backbone, img_size, beam=8, n=None):
+def evaluate(enc, head, root, level, device, backbone, img_size, beam=8, n=None, group_k=1):
     enc.eval(); head.eval()
     DS = sd.make_dataset_class()
-    ds = DS(root, "test", level)
+    ds = DS(root, "test", level, group_k=group_k)
     idx = range(len(ds)) if n is None else range(min(n, len(ds)))
     per = {s: {"ll": [], "err": []} for s in SHAPE_NAMES}
-    dens = DENS(level)
+    dens = DENS(level); nst = level // group_k                    # head path depth = # super-levels
     for i in idx:
         item = ds[i]
         img = item["image"][None].to(device)
@@ -94,9 +123,9 @@ def evaluate(enc, head, root, level, device, backbone, img_size, beam=8, n=None)
         # batched log-lik over the K equivalent rotations (replicate the single image's patches)
         pr = patches.expand(K, -1, -1)
         lp = head.path_loglik(pr, item["cell0"].to(device), item["child_idx"].to(device),
-                              item["child_off"].to(device), item["parent_enc"].to(device), level)
+                              item["child_off"].to(device), item["parent_enc"].to(device), nst)
         ll = (lp + dens).mean().item()                            # avg over equiv set (IPDF metric)
-        R_map = torch.from_numpy(beam_map(enc, head, item["image"][None], level, beam, device))  # (1,3,3)
+        R_map = torch.from_numpy(beam_map(enc, head, item["image"][None], level, beam, device, group_k))  # (1,3,3)
         # rotation error = min geodesic to any equivalent GT (use the rendered equiv matrices directly)
         gt = torch.from_numpy(ds.equiv(i)).float()                # (K,3,3)
         err = geodesic_deg(R_map.expand(gt.shape[0], -1, -1).float(), gt).min().item()
@@ -120,7 +149,7 @@ def evaluate(enc, head, root, level, device, backbone, img_size, beam=8, n=None)
 # ---------------------------------------------------------------- held-out val (single-rotation LL, for selection)
 
 @torch.no_grad()
-def val_loglik(enc, head, root, level, device, val_idx, bs=128, workers=4):
+def val_loglik(enc, head, root, level, device, val_idx, bs=128, workers=4, group_k=1):
     """Mean single-rotation log-likelihood on a held-out slice of the TRAIN split, per shape and overall.
 
     Poses are drawn uniformly, so a held-out rendered rotation is uniform over its equivalent set; its single-rotation
@@ -128,15 +157,15 @@ def val_loglik(enc, head, root, level, device, val_idx, bs=128, workers=4):
     single-GT-rotation rule (no equivalents are ever used here). Used only to pick a step count / best checkpoint."""
     enc.eval(); head.eval()
     DS = sd.make_dataset_class()
-    sub = torch.utils.data.Subset(DS(root, "train", level), val_idx)
+    sub = torch.utils.data.Subset(DS(root, "train", level, group_k=group_k), val_idx)
     dl = DataLoader(sub, batch_size=bs, shuffle=False, num_workers=workers, pin_memory=True)
-    dens = DENS(level); nS = len(SHAPE_NAMES)
+    dens = DENS(level); nS = len(SHAPE_NAMES); nst = level // group_k
     sll = np.zeros(nS); cnt = np.zeros(nS)
-    st0 = np.zeros(nS); stc = np.zeros((nS, level)); sent = np.zeros((nS, level))   # per-level trajectory
+    st0 = np.zeros(nS); stc = np.zeros((nS, nst)); sent = np.zeros((nS, nst))       # per-(super)level trajectory
     for b in dl:
         patches = enc(b["image"].to(device)).float()
         t0, tc, _, ent = head.path_terms(patches, b["cell0"].to(device), b["child_idx"].to(device),
-                                         b["child_off"].to(device), b["parent_enc"].to(device), level)
+                                         b["child_off"].to(device), b["parent_enc"].to(device), nst)
         ll = (t0 + tc.sum(1)).cpu().numpy() + dens
         t0n = t0.cpu().numpy(); tcn = tc.cpu().numpy(); entn = ent.cpu().numpy(); lab = b["label"].numpy()
         for s in range(nS):
@@ -171,9 +200,11 @@ def decompose(a):
     coverage deficit (a near-one-hot pi0 vs sharp child levels) before choosing a fix, and fills tab:supp-perlevel."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ck = torch.load(a.ckpt, map_location=device, weights_only=False); ta = ck["args"]
-    enc, head = build(a.level, ta["backbone"], ta["img_size"], device)
+    head_kw, proj_dim = _cfg_from_args(ta)
+    enc, head = build(a.level, ta["backbone"], ta["img_size"], device, head_kw=head_kw, proj_dim=proj_dim)
     enc.load_state_dict(ck["enc"]); head.load_state_dict(ck["head"]); enc.eval(); head.eval()
-    DS = sd.make_dataset_class(); ds = DS(a.data, "test", a.level)
+    gk = ta.get("group_k", 1); nst = a.level // gk
+    DS = sd.make_dataset_class(); ds = DS(a.data, "test", a.level, group_k=gk)
     dens = DENS(a.level)
     by = {s: [] for s in range(len(SHAPE_NAMES))}
     for i in range(len(ds)):
@@ -188,7 +219,7 @@ def decompose(a):
             item = ds[i]; K = item["cell0"].shape[0]
             patches = enc(item["image"][None].to(device)).float().expand(K, -1, -1)
             t0, tc, _, _ = head.path_terms(patches, item["cell0"].to(device), item["child_idx"].to(device),
-                                           item["child_off"].to(device), item["parent_enc"].to(device), a.level)
+                                           item["child_off"].to(device), item["parent_enc"].to(device), nst)
             lp = t0 + tc.sum(1)                                        # (K,) log P over the K equivalents
             t0s.append(t0.mean().item()); tcs.append(tc.mean(0).cpu().numpy())
             lls.append((lp + dens).mean().item())
@@ -229,12 +260,15 @@ def ceiling(a):
 def train(a):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(a.out, exist_ok=True)
-    enc, head = build(a.level, a.backbone, a.img_size, device, a.grad_ckpt)
+    head_kw, proj_dim = _cfg_from_args(vars(a))
+    enc, head = build(a.level, a.backbone, a.img_size, device, a.grad_ckpt, head_kw=head_kw, proj_dim=proj_dim)
+    print(f"head cond={head_kw} proj_dim={proj_dim} | encoder embed_dim={enc.embed_dim}", flush=True)
+    gk = getattr(a, "group_k", 1); nst = a.level // gk          # head path depth = # super-levels (abl-arity)
     DS = sd.make_dataset_class()
-    full = DS(a.data, "train", a.level, augment=getattr(a, "augment", False))
+    full = DS(a.data, "train", a.level, augment=getattr(a, "augment", False), group_k=gk)
     tr_idx, va_idx = stratified_val_split(full.label, a.val_frac, a.seed)
     print(f"train {len(tr_idx)} | held-out val {len(va_idx)} (frac {a.val_frac}, seed {a.seed}) | "
-          f"roll-augment {'ON' if full.augment else 'off'}", flush=True)
+          f"roll-augment {'ON' if full.augment else 'off'} | group_k {gk} (arity b={8**gk}, {nst} super-levels)", flush=True)
     dl = DataLoader(torch.utils.data.Subset(full, tr_idx), batch_size=a.bs, shuffle=True,
                     num_workers=a.workers, drop_last=True, pin_memory=True, persistent_workers=a.workers > 0)
     opt = torch.optim.AdamW([{"params": enc.parameters(), "lr": a.lr_bb},
@@ -258,7 +292,7 @@ def train(a):
 
     def validate():
         nonlocal best
-        ov, per, diag = val_loglik(enc, head, a.data, a.level, device, va_idx, workers=a.workers)
+        ov, per, diag = val_loglik(enc, head, a.data, a.level, device, va_idx, workers=a.workers, group_k=gk)
         tag = "*" if ov > best else " "
         print(f"  [val step {step}] ll {ov:6.2f} {tag} | " +
               " ".join(f"{k} {v:5.2f}" for k, v in per.items()), flush=True)
@@ -273,7 +307,7 @@ def train(a):
             img = b["image"].to(device, non_blocking=True)
             batch = {k: b[k].to(device) for k in ("cell0", "child_idx", "child_off", "parent_enc")}
             patches = enc(img).float()
-            loss, logc = head(patches, batch, a.level)
+            loss, logc = head(patches, batch, nst)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             nn.utils.clip_grad_norm_(list(enc.parameters()) + list(head.parameters()), 1.0)
@@ -290,16 +324,17 @@ def train(a):
             if step >= total:
                 break
     validate()
-    print("=== final eval (test, last.pth) ==="); evaluate(enc, head, a.data, a.level, device, a.backbone, a.img_size, a.beam, a.n_eval)
+    print("=== final eval (test, last.pth) ==="); evaluate(enc, head, a.data, a.level, device, a.backbone, a.img_size, a.beam, a.n_eval, group_k=gk)
 
 
 def load_eval(a):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ck = torch.load(a.ckpt, map_location=device, weights_only=False)
     ta = ck["args"]
-    enc, head = build(a.level, ta["backbone"], ta["img_size"], device)
+    head_kw, proj_dim = _cfg_from_args(ta)
+    enc, head = build(a.level, ta["backbone"], ta["img_size"], device, head_kw=head_kw, proj_dim=proj_dim)
     enc.load_state_dict(ck["enc"]); head.load_state_dict(ck["head"])
-    evaluate(enc, head, a.data, a.level, device, ta["backbone"], ta["img_size"], a.beam, a.n_eval)
+    evaluate(enc, head, a.data, a.level, device, ta["backbone"], ta["img_size"], a.beam, a.n_eval, group_k=ta.get("group_k", 1))
 
 
 if __name__ == "__main__":
@@ -320,6 +355,14 @@ if __name__ == "__main__":
             p.add_argument("--resume", default=None, help="checkpoint to resume enc/head/opt/sched/step from")
             p.add_argument("--grad_ckpt", action="store_true")
             p.add_argument("--augment", action="store_true", help="exact in-plane roll augmentation (train only)")
+            # ablations: child-scorer conditioning (abl-cond), scorer sharing (abl-misc), backbone proj (abl-backbone)
+            p.add_argument("--no_offset", action="store_true", help="abl-cond: drop child-offset conditioning")
+            p.add_argument("--no_parent", action="store_true", help="abl-cond: drop parent-rotation conditioning")
+            p.add_argument("--no_level", action="store_true", help="abl-cond: drop level embedding")
+            p.add_argument("--no_fourier", action="store_true", help="abl-cond: raw inputs, no Fourier encoding")
+            p.add_argument("--per_level_scorer", action="store_true", help="abl-misc: separate child scorer per level")
+            p.add_argument("--proj_dim", type=int, default=None, help="abl-backbone: project encoder tokens to this width")
+            p.add_argument("--group_k", type=int, default=1, help="abl-arity: group k base-8 levels into one super-level of width b=8**k (level must be divisible by k)")
         elif name == "eval":
             p.add_argument("--ckpt", required=True)
         else:                                                      # decompose

@@ -1,0 +1,40 @@
+#!/bin/bash
+#PBS -N symt_L7_d4
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=16:ngpus=1:mem=96gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -o /scratch/hpc/visitor/dtu004.visitor/spacehop/logs/
+# SYMSOL-T L=(7,7) deeper-tree training, run from the dtu004 account to use its free scai_q slot (dtu001's two
+# scai_q slots are busy with the T-LESS fan-out, and dtu001's standard-queue A100s are saturated ~24h out).
+# Mirrors the user's established cross-account pattern (cf. lrc/tless_lrc_scai_dtu004.pbs): reads env/data/code
+# from the dtu001 project dir (world-readable scratch); writes checkpoints/logs to dtu004 scratch.
+#   P/le-wm-venv is a copy of dtu001's validated le-wm venv (torch 2.9.1+cu130, numpy 2.5.3); healpy from P/pylib.
+set -u
+P=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP          # read-only (other account): code, data, geom, venv copy
+W=/scratch/hpc/visitor/dtu004.visitor/spacehop           # dtu004-writable: checkpoints + logs
+PY=$P/le-wm-venv/bin/python
+GEOM=$P/data/symsolt_geom_L7
+RUN=$W/checkpoints/se3_symsolt_L7_roll
+LOG=$RUN/train_hpc.log
+mkdir -p $RUN $W/logs
+export PYTHONPATH=$P/pylib:$P/src:${PYTHONPATH:-}
+export XDG_CACHE_HOME=$W/cache/xdg HF_HOME=$W/cache/hf TORCH_HOME=$W/cache/torch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 PYTHONUNBUFFERED=1
+cd $P
+echo "=== $(date) job $PBS_JOBID symt L7 (dtu004) on $(hostname)" | tee -a $LOG
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | tee -a $LOG
+$PY -c "import torch,healpy,numpy,timm;print('torch',torch.__version__,'numpy',numpy.__version__,'healpy',healpy.__version__,'timm',timm.__version__,'cuda',torch.cuda.is_available())" 2>&1 | tee -a $LOG
+
+if [ -f "$RUN/COMPLETE" ]; then echo "already COMPLETE -> nothing to do" | tee -a $LOG; exit 0; fi
+if [ ! -f "$GEOM/train_cell0.npy" ] || [ ! -f "$GEOM/test_cell0.npy" ]; then
+  echo "FATAL: L7 geometry missing at $GEOM (dtu001 prep must have produced it)" | tee -a $LOG; exit 2; fi
+RESUME=""; [ -f "$RUN/last.pth" ] && RESUME="--resume $RUN/last.pth" && echo "resuming from last.pth" | tee -a $LOG
+$PY src/se3_train.py train --geom $GEOM --out $RUN --roll_aug \
+    --steps 60000 --bs 48 --workers 12 --save_every 2500 --eval_every 2500 $RESUME >> $LOG 2>&1
+rc=$?
+if [ $rc -eq 0 ]; then touch $RUN/COMPLETE; echo "=== $(date) SYMT_L7_DONE rc=0" | tee -a $LOG;
+else echo "=== $(date) SYMT_L7_EXIT rc=$rc (resume by re-qsub)" | tee -a $LOG; fi
+exit $rc

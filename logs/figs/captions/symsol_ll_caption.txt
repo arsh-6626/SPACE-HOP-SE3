@@ -1,0 +1,9 @@
+% Figure: symsol_ll.pdf
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figs/symsol_ll.pdf}
+  \caption{\textbf{SYMSOL average log-likelihood.} NeST exceeds the SpyroPose state of the art on both SYMSOL-I (a
+  single \emph{joint} model, $7.71$ vs.\ $7.33$) and SYMSOL-II (per-shape, $10.34$ vs.\ $9.27$). Higher is better;
+  nats. (Baselines from published results; verify before camera-ready.)}
+  \label{fig:symsolll}
+\end{figure}

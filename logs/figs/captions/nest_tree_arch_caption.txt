@@ -1,0 +1,23 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_tree_arch.pdf}
+  \caption{\textbf{The NeST network and the SE(3) decode are one top-down tree.}
+  A shared ViT-B/16 encoder (augreg2, fine-tuned at lr $10^{-5}$) produces patch
+  tokens $X$ that act as a $K,V$ rail feeding every node. At each node the drawn
+  block is the network that computes that node's categorical: the \emph{root}
+  (l0\_attn) sends $72$ learned queries through two cross-attention layers to $X$
+  and a softmax, giving the $72$-way rotation root $p_0(c_0\mid x)$; each
+  \emph{child} (child\_attn, one set of weights reused at every level) builds its
+  queries from the parent code $[R,\hat g]$ and the child offset via a Fourier
+  encoding and \texttt{child\_proj} MLP, cross-attends to the same $X$, and emits
+  the $64$-way child categorical $p(c_\ell\mid\text{path},x)=8\,$rot$\times8\,$oct.
+  The panels are the network's genuine softmax tensors (HEALPix root; $8\times8$
+  child heatmaps). The tree descends by selection: gold marks the beam-MAP child,
+  whose cell becomes the next level's parent code (the recurrence), while the faded
+  stubs are pruned siblings. Because every node is a log-softmax of a shared-weight
+  attention block, the whole tree is a normalized SE(3) density by construction;
+  the zero-initialised output starts it at the uniform floor. The leaf reads out
+  $R$ (cell centre) and $t=\hat t + A\,g$, shown as the predicted 3D box. One real
+  forward pass (YCB-V object 3, scene 51/1629).}
+  \label{fig:nest_tree_arch}
+\end{figure*}

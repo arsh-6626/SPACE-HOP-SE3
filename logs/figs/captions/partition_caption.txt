@@ -1,0 +1,14 @@
+% Figure: partition.pdf
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figs/partition.pdf}
+  \caption{\textbf{Equivolumetric partition of $\mathrm{SO}(3)$.} \emph{Top:} our Hopf--HEALPix base
+  tessellation at nside $1/2/4$; every cell has equal Haar volume (max/min volume ratio $=1.000$, exact by
+  construction), and refinement preserves this. \emph{Bottom:} a na\"ive equal-angle $(\varphi,\theta)$ grid at
+  matched resolution, whose cells pinch toward the poles (darker $=$ smaller volume). The na\"ive grid's
+  cell-volume ratio grows without bound with $\theta$-resolution ($3.7\times\!\to\!7.6\times\!\to\!15.3\times$),
+  so a uniform categorical over its cells carries a $+0.11$--$0.14$\,nat log-likelihood bias relative to the true
+  uniform density; our equal-volume tree has bias $0$. For scale, the SYMSOL-I state-of-the-art margin is
+  $\approx\!0.4$\,nat.}
+  \label{fig:partition}
+\end{figure*}

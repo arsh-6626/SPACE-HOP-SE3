@@ -147,13 +147,44 @@ def crop_resize(img, cu, cv, side_px, out_px):
     half = side_px / 2.0
     x0, y0 = int(round(cu - half)), int(round(cv - half))
     x1, y1 = int(round(cu + half)), int(round(cv + half))
+    xs0, ys0, xs1, ys1 = max(0, x0), max(0, y0), min(W, x1), min(H, y1)
+    if xs1 <= xs0 or ys1 <= ys0:
+        return np.zeros((out_px, out_px, 3), np.uint8)   # window fully off-frame (jittered t_hat) -> black patch
     pad_l, pad_t = max(0, -x0), max(0, -y0)
     pad_r, pad_b = max(0, x1 - W), max(0, y1 - H)
-    xs0, ys0, xs1, ys1 = max(0, x0), max(0, y0), min(W, x1), min(H, y1)
     crop = img[ys0:ys1, xs0:xs1]
     if pad_l or pad_t or pad_r or pad_b:
         crop = np.pad(crop, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)), mode="edge")
     return np.asarray(Image.fromarray(crop).resize((out_px, out_px), Image.BILINEAR), np.uint8)
+
+
+# ---------------------------------------------------------------- in-plane roll augmentation ----
+# Rolling the object-centred crop by phi is a camera roll about the object's VIEWING axis v = t_hat/||t_hat||
+# (NOT the camera z-axis -- that only agrees at the principal point). Exact pose relabel (convention pinned by
+# scratchpad/aug_convention.py: 0.000 px at centre, ~1 px at 15 deg off-axis for the +phi / viewing-axis pair):
+#     R -> Rv(+phi) R ,  t -> Rv(+phi) t ,  and the image content rotates by [[c,-s],[s,c]] about (cu,cv).
+# t_hat lies on v so Rv t_hat = t_hat: the box centre and det A are unchanged, only g rotates.
+
+def axis_rot(v, ang):
+    """Rotation matrix (3,3) by `ang` rad about axis v (Rodrigues; v normalised internally)."""
+    v = np.asarray(v, np.float64); v = v / (np.linalg.norm(v) + 1e-12)
+    x, y, z = v; c, s = np.cos(ang), np.sin(ang); C = 1.0 - c
+    return np.array([[c + x*x*C, x*y*C - z*s, x*z*C + y*s],
+                     [y*x*C + z*s, c + y*y*C, y*z*C - x*s],
+                     [z*x*C - y*s, z*y*C + x*s, c + z*z*C]], np.float64)
+
+
+def rotate_about(img, cu, cv, phi):
+    """Rotate `img` (HxWx3 uint8) about pixel (cu,cv) by content matrix M=[[c,-s],[s,c]] in (u,v) coords (v down),
+    matching the pose relabel. PIL AFFINE maps output->input, so it takes M^{-1}=[[c,s],[-s,c]] about (cu,cv)."""
+    from PIL import Image
+    c, s = np.cos(phi), np.sin(phi)
+    a, b = c, s                                      # M^{-1} row 0
+    d, e = -s, c                                     # M^{-1} row 1
+    cx = cu - (a * cu + b * cv)
+    fy = cv - (d * cu + e * cv)
+    return np.asarray(Image.fromarray(img).transform(
+        (img.shape[1], img.shape[0]), Image.AFFINE, (a, b, cx, d, e, fy), resample=Image.BILINEAR), np.uint8)
 
 
 # ---------------------------------------------------------------- dataset ----
@@ -165,15 +196,21 @@ def make_dataset_class():
     class Tless(Dataset):
         """One object's SE(3) dataset. __getitem__ returns image + (R, g, det_A, logVbox) for build_geometry."""
         def __init__(self, root, cache, split, obj, L_rot, L_trans, d_m,
-                     t_hat="jitter", sigma=0.25, crop_pad=1.4, out_px=224, seed=0):
+                     t_hat="jitter", sigma=0.25, crop_pad=1.4, out_px=224, seed=0, augment=False,
+                     bbox_sj=0.12, bbox_cj=0.06):
             z = np.load(os.path.join(cache, f"{split}_obj{obj}.npz"))
             self.root, self.split, self.obj = root, split, obj
             self.L_rot, self.L_trans = L_rot, L_trans
             self.d_m = d_m
             self.t_hat_mode, self.sigma, self.crop_pad, self.out_px = t_hat, sigma, crop_pad, out_px
+            self.augment = augment                            # in-plane viewing-axis roll relabel (train only)
+            # 'bbox' t_hat mode: anchor from the 2D detection box (== eval builder), with detector-like scale/centre
+            # jitter so the net trains on the SAME biased-anchor distribution it faces at test (FastPose-style).
+            self.bbox_sj, self.bbox_cj = bbox_sj, bbox_cj
             self.scene, self.im, self.R = z["scene"], z["im"], z["R"].reshape(-1, 3, 3)
             self.t = z["t"]                                   # mm
             self.K = z["K"].reshape(-1, 3, 3)
+            self.bbox = z["bbox"] if "bbox" in z.files else None   # (N,4) x,y,w,h (bbox_visib, modal)
             self.rng = np.random.RandomState(seed + obj)
 
         def __len__(self):
@@ -191,21 +228,54 @@ def make_dataset_class():
 
         def __getitem__(self, i):
             t_m = self.t[i] / 1000.0                          # mm -> m
-            A = box_A(self.d_m, t_m)                           # box uses t_hat; approx with t_GT for the jitter dir
-            t_hat = self._t_hat(t_m, A)
-            A = box_A(self.d_m, t_hat)                         # final box about the estimate
+            if self.t_hat_mode == "bbox":
+                # anchor from the 2D detection box, IDENTICAL to the eval builder (import, don't retype),
+                # with detector-like scale/centre jitter so train sees the test-time biased-anchor distribution.
+                from se3_bop_eval import _t_hat_from_bbox
+                bb = self.bbox[i].astype(np.float64).copy()
+                x0, y0, w, h = bb
+                if self.bbox_sj > 0 or self.bbox_cj > 0:
+                    w = w * np.exp(self.rng.uniform(-self.bbox_sj, self.bbox_sj))
+                    h = h * np.exp(self.rng.uniform(-self.bbox_sj, self.bbox_sj))
+                    ccx = x0 + bb[2] / 2 + self.rng.uniform(-self.bbox_cj, self.bbox_cj) * bb[2]
+                    ccy = y0 + bb[3] / 2 + self.rng.uniform(-self.bbox_cj, self.bbox_cj) * bb[3]
+                    bb = np.array([ccx - w / 2, ccy - h / 2, w, h], np.float64)
+                t_hat = _t_hat_from_bbox(bb, self.K[i], self.d_m)
+                if not np.isfinite(t_hat).all() or t_hat[2] <= 0:
+                    t_hat = t_m.copy()                         # degenerate box -> fall back to GT anchor
+                A = box_A(self.d_m, t_hat)
+            else:
+                A = box_A(self.d_m, t_m)                        # box uses t_hat; approx with t_GT for the jitter dir
+                t_hat = self._t_hat(t_m, A)
+                A = box_A(self.d_m, t_hat)                      # final box about the estimate
             g = np.linalg.solve(A, t_m - t_hat)                # normalized-cube coord of the GT translation
             g = np.clip(g, -0.49999, 0.49999)
             det_A = self.d_m ** 2 * float(t_hat[2])            # == |det A|
+            R_use = self.R[i].astype(np.float64)
+            phi = 0.0
 
-            # crop about projected t_hat; side ~ object diameter in px * pad
+            # in-plane roll augmentation (train only): relabel R,t by a camera roll Rv(+phi) about the viewing axis
+            # v=t_hat/||t_hat||; rejection-sample phi so the rolled g stays in the box (as SYMSOL roll-aug does).
+            if self.augment:
+                v = t_hat / (np.linalg.norm(t_hat) + 1e-12)
+                for _ in range(8):
+                    cand = self.rng.uniform(-np.pi, np.pi)
+                    Rv = axis_rot(v, cand)
+                    g_try = np.linalg.solve(A, Rv @ t_m - t_hat)
+                    if np.max(np.abs(g_try)) <= 0.5:
+                        phi, R_use, g = cand, Rv @ R_use, np.clip(g_try, -0.49999, 0.49999)
+                        break
+
+            # crop about projected t_hat; side ~ object diameter in px * pad. Roll the frame about the crop centre.
             img = np.asarray(_open_rgb(rgb_path(self.root, self.split, int(self.scene[i]), int(self.im[i]))), np.uint8)
             cu, cv = project(self.K[i], t_hat)
+            if phi != 0.0:
+                img = rotate_about(img, cu, cv, phi)
             side = self.d_m / float(t_hat[2]) * float(self.K[i][0, 0]) * self.crop_pad
             crop = crop_resize(img, cu, cv, max(8.0, side), self.out_px)
             x = (crop.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
             return {"image": torch.from_numpy(x.transpose(2, 0, 1).copy()),
-                    "R": torch.from_numpy(self.R[i].astype(np.float32)),
+                    "R": torch.from_numpy(R_use.astype(np.float32)),
                     "g": torch.from_numpy(g.astype(np.float32)),
                     "det_A": float(det_A), "label": int(self.obj)}
 
@@ -229,14 +299,20 @@ class Collate:
         mats = np.stack([b["R"].numpy() for b in batch])
         gs = np.stack([b["g"].numpy() for b in batch])
         geom = sh.build_geometry(mats, gs, self.L_rot, self.L_trans)
-        return {"image": torch.stack([b["image"] for b in batch]),
-                "det_A": torch.tensor([b["det_A"] for b in batch], dtype=torch.float64),
-                "label": torch.tensor([b["label"] for b in batch]),
-                "cell0": torch.as_tensor(geom["cell0"]),
-                "levels": [{"kind": lv["kind"],
-                            "child_off6": torch.as_tensor(lv["child_off6"]),
-                            "parent12": torch.as_tensor(lv["parent12"]),
-                            "target": torch.as_tensor(lv["target"])} for lv in geom["levels"]]}
+        out = {"image": torch.stack([b["image"] for b in batch]),
+               "det_A": torch.tensor([b["det_A"] for b in batch], dtype=torch.float64),
+               "label": torch.tensor([b["label"] for b in batch]),
+               "cell0": torch.as_tensor(geom["cell0"]),
+               "levels": [{"kind": lv["kind"],
+                           "child_off6": torch.as_tensor(lv["child_off6"]),
+                           "parent12": torch.as_tensor(lv["parent12"]),
+                           "target": torch.as_tensor(lv["target"])} for lv in geom["levels"]]}
+        if "refine" in geom:   # continuous within-cell GT residual targets for the refinement head
+            r = geom["refine"]           # g-space (normalized cube), independent of the detector box A
+            out["refine"] = {"code12": torch.as_tensor(r["code12"]),
+                             "rot_resid": torch.as_tensor(r["rot_resid"]),
+                             "g_resid": torch.as_tensor(r["g_resid"])}
+        return out
 
 
 # ---------------------------------------------------------------- self-test: real-crop uniform floor ----

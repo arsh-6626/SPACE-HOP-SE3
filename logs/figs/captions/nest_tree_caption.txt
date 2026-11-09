@@ -1,0 +1,21 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_tree.pdf}
+  \caption{\textbf{A real NeST decode, top-down.} We run the trained model on one
+  SYMSOL test image (a tetrahedron) and visualize its greedy MAP descent through
+  the Hopf--HEALPix tree. Each node is a true shaded $S^2$ globe whose cells are
+  the actual HEALPix pixels from \texttt{so3\_nested.py} (NESTED scheme), with a
+  roll dial for the Hopf fibre $S^1$. The root $p_0(c_0\mid x)$ is a $72$-way
+  categorical and is intentionally diffuse (MAP $p=0.10$): a tetrahedron has a
+  $12$-fold rotational symmetry, so the root mass is split across its symmetric
+  modes. Every subsequent level is an $8$-way conditional $p(c_\ell\mid\cdot)$ and
+  the printed probabilities are the model's genuine softmax outputs; the
+  conditionals are sharp ($0.93,0.99,0.99$ along the chosen path). Gold marks the
+  model's argmax child at each node (the MAP root$\to$leaf path) and branch width
+  is proportional to the predicted probability. Descending the path, the base
+  pixel refines $\times4$ (nside $1\!\to\!2\!\to\!4\!\to\!8$) and the roll arc
+  $\times2$ every level, so the selected equal-volume cell shrinks by $\times8$ per
+  step. Nothing in this figure is hand-specified: the path, the branch
+  probabilities, and the input are a single forward pass of the trained network.}
+  \label{fig:nest_tree}
+\end{figure*}

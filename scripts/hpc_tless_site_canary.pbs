@@ -1,0 +1,45 @@
+#!/bin/bash
+#PBS -N tls_site
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=16:ngpus=1
+#PBS -l walltime=06:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/tls_site.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/tls_site.err
+# SITE canary: warm-start an existing _aug T-LESS object, short fine-tune on train_pbr + train_primesense (REAL)
+# with the bbox-derived t_hat anchor (== eval builder) so the depth readout adapts to the real domain.
+# Gate: does VSD/MSSD rise (depth) while MSPD holds, vs the existing nestse3 per-object recall.  New TAG=_site.
+set -u
+OBJ="${OBJ:-14}"
+STEPS="${STEPS:-8000}"
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+BOP=/scratch/hpc/visitor/dtu001.visitor/liepose/data/bop_datasets/tless   # READ ONLY
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python                # shared venv: use, never modify
+CACHE=$ROOT/cache/tless_se3
+INIT=$ROOT/checkpoints/se3_tless_aug_obj${OBJ}/last.pth
+RUN=$ROOT/checkpoints/se3_tless_site_obj${OBJ}
+LOG=$RUN/train_hpc.log
+mkdir -p $CACHE $RUN $ROOT/logs
+export PYTHONPATH=$ROOT/pylib:$ROOT/src:${PYTHONPATH:-}
+export XDG_CACHE_HOME=$ROOT/cache/xdg HF_HOME=$ROOT/cache/hf TORCH_HOME=$ROOT/cache/torch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 PYTHONUNBUFFERED=1
+cd $ROOT
+echo "=== $(date) SITE canary obj $OBJ steps $STEPS on $(hostname)" | tee -a $LOG
+[ -f "$INIT" ] || { echo "FATAL: warm-start ckpt missing: $INIT" | tee -a $LOG; exit 2; }
+$PY -c "import torch,healpy,timm;print('torch',torch.__version__,'healpy',healpy.__version__)" 2>&1 | tee -a $LOG
+# index caches if missing (train_primesense is the REAL split that rides along)
+for SPLIT in train_pbr test_primesense train_primesense; do
+  if [ ! -f "$CACHE/${SPLIT}_obj${OBJ}.npz" ]; then
+    echo "=== $(date) indexing $SPLIT obj $OBJ" | tee -a $LOG
+    $PY src/se3_tless_data.py index --root $BOP --out $CACHE --objs $OBJ --split $SPLIT >> $LOG 2>&1
+  fi
+done
+$PY src/se3_tless_train.py train --root $BOP --cache $CACHE --obj $OBJ \
+  --out $RUN --test_split test_primesense \
+  --init $INIT --t_hat_train bbox --real_split train_primesense \
+  --test_that bbox --bbox_sj 0.08 --bbox_cj 0.06 \
+  --L_rot 5 --L_trans 5 --steps $STEPS --bs 48 --workers 12 \
+  --save_every 2000 --eval_every 1000 --lr 1e-4 --lr_bb 1e-5 >> $LOG 2>&1
+RC=$?
+echo "=== $(date) train rc=$RC" | tee -a $LOG
+[ $RC -eq 0 ] && touch $RUN/COMPLETE

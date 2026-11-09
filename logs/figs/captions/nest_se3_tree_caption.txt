@@ -1,0 +1,18 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_se3_tree.pdf}
+  \caption{\textbf{SE(3) decode tree on one real YCB-V image.} A single forward pass of the trained per-object
+  NeST head (object 3, a sugar box; scene 51/1629) decoded through the \emph{joint} $SE(3)$ tree, drawn as a
+  multi-branch tree. The \textbf{input image is the root node}; each level fans the MAP node into its $64$-way
+  child, factorized as $8$ rotation cells $\times$ $8$ translation octants. The $8$ rotation children are shown
+  as a row of nodes, each a \textbf{true equal-area Mollweide projection of the Hopf--HEALPix base sphere lifted
+  into 3D} (a perspective card): the filled HEALPix pixel is the equal-volume $S^2$ binning and its hue is the
+  Hopf roll fibre (dial beneath). The translation factor is the isometric \textbf{octree cube} on the gold node,
+  whose eight octants are the translation children shaded by marginal probability. Grey edges are the full
+  branching; the thick gold spine is the beam-MAP root$\to$leaf path, with width proportional to the joint
+  probability and the printed values the model's genuine softmax outputs. The chosen cell refines rotation
+  $\times4$ (pixel) $\times2$ (roll) and translation $\times8$ per level. The \textbf{output 6D pose is the leaf
+  node}: the predicted 3D box (red) on the RGB image next to ground truth (green), recovered to $6.8^\circ$
+  rotation and $8$\,mm translation. Nothing is hand-specified.}
+  \label{fig:nest_se3_tree}
+\end{figure*}

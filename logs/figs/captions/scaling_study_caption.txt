@@ -1,0 +1,12 @@
+% Figure: scaling_study.pdf
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figs/scaling_study.pdf}
+  \caption{\textbf{Scaling behaviour of the pose tree.} \emph{(A)} Achieved average log-likelihood vs.\ final
+  resolution $N$ for the $8$-way model (real data): per-level gains shrink and the gap to the discretization ceiling
+  widens as depth grows (feature-limited saturation). Diamonds mark the branching-factor points ($b{=}64$ at $L3$,
+  $b{=}512$ at $L2$) at matched $N$. \emph{(B)} Compute (total children scored $=b\log_b(N/N_0)$) vs.\ arity $b$ at
+  fixed final $N$: the radix economy is minimized at $b=e\approx2.72$; our $b=8$ scores $48$ children per likelihood
+  vs.\ $1024$ at $b=512$.}
+  \label{fig:scaling}
+\end{figure}

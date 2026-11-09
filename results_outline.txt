@@ -1,0 +1,180 @@
+================================================================================
+NeST Results section -- claim-driven outline with table skeletons (LaTeX)
+================================================================================
+Requires: \usepackage{booktabs,multirow}
+Legend:  numbers with a source note = real values from our runs;
+         \todo{...} = fill in (baseline numbers / per-shape cells / pending exps).
+Higher avg LL (nats) is better; higher BOP AR is better.
+--------------------------------------------------------------------------------
+
+
+%======================= 4.1 Experimental setup =======================
+% Prose only: datasets (SYMSOL-I/II, T-LESS, YCB-V), metrics (avg LL for SO(3);
+% BOP AR for SE(3)), baselines, backbone (ViT-B/16 augreg2), training details.
+
+
+%======================= 4.2 Exactly-normalized densities are accurate =======================
+% Claim: NeST matches/beats IS-normalized density methods on SYMSOL avg LL, with
+% NO Monte-Carlo normalization; one JOINT model beats per-shape SOTA.
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{SYMSOL-I average log-likelihood} (nats, $\uparrow$). A single
+  \emph{joint} NeST model is trained over all shapes; prior methods report the
+  best per-shape result. NeST beats the per-shape state of the art on the mean.}
+  \label{tab:symsol1}
+  \begin{tabular}{lcccccc}
+    \toprule
+    Method & cone & cyl & tet & cube & icosa & \textbf{Avg} \\
+    \midrule
+    IPDF \cite{}            & \todo & \todo & \todo & \todo & \todo & \todo \\
+    Rotation Laplace \cite{}& \todo & \todo & \todo & \todo & \todo & \todo \\
+    \todo{baseline} \cite{} & \todo & \todo & \todo & \todo & \todo & 7.33 \\
+    \midrule
+    \textbf{NeST (joint, ours)} & \todo & \todo & \todo & \todo & \todo & \textbf{7.71} \\
+    \bottomrule
+  \end{tabular}
+  % 7.71 (ours, joint) vs 7.33 (best prior, per-shape): real, SYMSOL-I gate-1.
+\end{table}
+
+
+%======================= 4.3 One model captures symmetry & multimodality =======================
+% Claim: the equivolumetric Hopf-HEALPix partition represents multiple symmetric
+% modes without symmetry labels and without single-mode collapse. Evidence:
+% SYMSOL-II (hard multimodal) + qualitative density panels (Fig. so3_*).
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{SYMSOL-II average log-likelihood} (nats, $\uparrow$), the
+  multi-modal split (marked objects with partial/continuous symmetry). The joint
+  NeST model recovers all symmetric modes without symmetry supervision.}
+  \label{tab:symsol2}
+  \begin{tabular}{lcccc}
+    \toprule
+    Method & sphX & cylO & tetX & \textbf{Avg} \\
+    \midrule
+    IPDF \cite{}            & \todo & \todo & \todo & \todo \\
+    \todo{baseline} \cite{} & \todo & \todo & \todo & \todo \\
+    \midrule
+    \textbf{NeST (ours)}    & \todo & \todo & \todo & \todo \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+% (Shape column names are placeholders -- use the official SYMSOL-II object names.)
+
+
+%======================= 4.4 The construction extends to full SE(3) =======================
+% Claim: rotation tree x translation octree -> competitive BOP AR, RGB-only.
+% Be explicit that the pose DISTRIBUTION is strong (MSPD high) and depth is the
+% metric limiter (VSD), which motivates future depth conditioning.
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{BOP average recall} on T-LESS and YCB-V ($\uparrow$), RGB-only.
+  AR is the mean of the three BOP errors; we additionally report the per-error
+  recalls. NeST's MSPD (projection) recall is strong; VSD (depth) is the limiter.}
+  \label{tab:bop}
+  \begin{tabular}{llcccc}
+    \toprule
+    Dataset & Method & Mod. & AR\textsubscript{VSD} & AR\textsubscript{MSSD} & AR\textsubscript{MSPD} \\
+    \midrule
+    \multirow{2}{*}{T-LESS}
+      & \todo{RGB baseline} \cite{} & RGB & \todo & \todo & \todo \\
+      & \textbf{NeST (ours)}        & RGB & \todo & \todo & 0.70 \\
+    \midrule
+    \multirow{2}{*}{YCB-V}
+      & \todo{RGB baseline} \cite{} & RGB & \todo & \todo & \todo \\
+      & \textbf{NeST (ours)}        & RGB & \todo & \todo & \todo \\
+    \bottomrule
+  \end{tabular}
+  % T-LESS RGB-only mean AR = 0.374 (real); AR_MSPD = 0.70 (real, strong);
+  % VSD weak (depth-limited). Put mean AR in text or add an 'AR' column.
+\end{table}
+
+
+%======================= 4.5 Uncertainty is calibrated and actionable =======================
+% Claim: the full density yields uncertainty that tracks error (diffuse when
+% wrong) and a small oracle set of modes captures the correct pose.
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{Uncertainty calibration and oracle-$@k$} on YCB-V. Predictive
+  entropy correlates with pose error (Spearman $\rho$), and retaining the top-$k$
+  modes recovers additional correct poses over the single MAP estimate.}
+  \label{tab:uncertainty}
+  \begin{tabular}{lcccc}
+    \toprule
+    & $\rho$(unc,\,err)\,$\uparrow$ & MAP (@1) & oracle @2 & oracle @4 \\
+    \midrule
+    NeST (ours) & 0.59 & \todo{AR} & \todo & \todo{+0.127 vs @1} \\
+    \bottomrule
+  \end{tabular}
+  % rho = 0.59 (real, YCB-V, diffuse-when-wrong); oracle@4 gain = +0.127 over MAP
+  % (real). Fill the @1 baseline then @4 = @1 + 0.127. Note obj21 (foam_brick)
+  % failure (82 deg MAP) in text as a rigor point.
+\end{table}
+
+
+%======================= 4.6 Efficiency and scaling =======================
+% Claim: exact normalization is not bought with compute -- O(L) likelihood and
+% inference; accuracy scales smoothly with tree depth / branching arity.
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{Efficiency.} Likelihood evaluation and MAP decoding are $O(L)$
+  in tree depth. Reported at the final resolution ($L_{\mathrm{rot}}{=}L_{\mathrm{trans}}{=}5$).}
+  \label{tab:efficiency}
+  \begin{tabular}{lcccc}
+    \toprule
+    Method & Normalization & Params & LL eval (ms) & MAP (ms) \\
+    \midrule
+    \todo{implicit baseline} \cite{} & MC / IS & \todo & \todo & \todo \\
+    \textbf{NeST (ours)}             & exact (closed form) & \todo & \todo & \todo \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{Scaling with tree depth.} Average LL (SYMSOL-I) and cost as a
+  function of rotation-tree depth $L$ (resolution $N_{\mathrm{side}}=2^{L}$).}
+  \label{tab:scaling}
+  \begin{tabular}{lccccc}
+    \toprule
+    Depth $L$ & 1 & 2 & 3 & 4 & 5 \\
+    \midrule
+    $N(L)$ cells & 576 & 4\,608 & 36\,864 & \todo & \todo \\
+    Avg LL $\uparrow$ & \todo & \todo & \todo & \todo & \todo \\
+    \bottomrule
+  \end{tabular}
+  % N(L)=72*8^L. Fill LL from the scaling_study run.
+\end{table}
+
+
+%======================= 4.7 Ablations =======================
+% Claim: each design choice from Sec. 3 earns its place.
+
+\begin{table}[t]
+  \centering
+  \caption{\textbf{Ablations.} Roll augmentation (the memorization fix) drives the
+  SYMSOL-I result; translation/depth ($z$-scale) normalization drives SE(3) recall.}
+  \label{tab:ablation}
+  \begin{tabular}{llc}
+    \toprule
+    Component & Setting & Metric \\
+    \midrule
+    \multirow{2}{*}{Roll augmentation}
+      & w/o (memorizes roll) & \todo{LL} \\
+      & \textbf{w/ (ours)}   & \textbf{7.71} \;(SYMSOL-I avg LL) \\
+    \midrule
+    \multirow{2}{*}{Depth ($z$-scale) norm.}
+      & w/o & 0.374 \;(T-LESS AR) \\
+      & \textbf{w/ (ours)} & \textbf{0.403} \;(T-LESS AR) \\
+    \midrule
+    \multirow{2}{*}{Tree depth $L$}
+      & $L{=}3$ & \todo \\
+      & $L{=}5$ (ours) & \todo \\
+    \bottomrule
+  \end{tabular}
+  % 7.71 w/ roll aug (real); T-LESS AR 0.374 -> 0.403 with train z-scale (real).
+\end{table}

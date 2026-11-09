@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N ycb_idx_d4
+#PBS -P hpc.dtu.kavinder
+#PBS -q standard
+#PBS -l select=1:ncpus=8:mem=32gb:centos=icelake
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /scratch/hpc/visitor/dtu004.visitor/spacehop/logs/ycb_idx_d4.out
+# CPU-only canary run AS dtu004: builds YCB-V per-object index caches for ALL objects, both splits
+# (train_pbr + test). Validates the copied le-wm venv, the never-run YCB-V path, read of dtu001's BOP tree,
+# and that dtu004's write dirs work -- all before the GPU fan-out. Pass `qsub -v OBJS=1,2,...`.
+set -u
+OBJS="${OBJS:?pass -v OBJS=1+2+3 (plus-separated; commas break qsub -v)}"
+OBJS="${OBJS//+/,}"
+P=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+BOP=/scratch/hpc/visitor/dtu001.visitor/liepose/data/bop_datasets/ycbv
+W=/scratch/hpc/visitor/dtu004.visitor/spacehop
+PY=$P/le-wm-venv/bin/python
+CACHE=$W/cache/ycbv_se3
+mkdir -p $CACHE $W/logs
+export PYTHONPATH=$P/pylib:$P/src:${PYTHONPATH:-}
+export HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
+cd $P
+echo "=== $(date) ycbv(dtu004) index objs=$OBJS on $(hostname)"
+$PY -c "import numpy,torch,healpy;print('numpy',numpy.__version__,'torch',torch.__version__,'healpy',healpy.__version__)" || exit 2
+for SPLIT in train_pbr test; do
+  echo "=== $(date) indexing $SPLIT objs $OBJS ==="
+  $PY src/se3_tless_data.py index --root $BOP --out $CACHE --objs $OBJS --split $SPLIT || exit 1
+done
+echo "=== $(date) YCB_IDX_D4_DONE ==="
+ls -la $CACHE | tail -8

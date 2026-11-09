@@ -25,6 +25,7 @@ import numpy as np
 # tensorflow-only environment with no healpy/scipy, and the torch Dataset needs neither.
 
 SHAPE_NAMES = ["tet", "cube", "icosa", "cone", "cyl"]            # SYMSOL I (the default pipeline)
+SHAPE_NAMES_ALL = SHAPE_NAMES + ["tetX", "cylO", "sphereX"]      # + SYMSOL II marked shapes (tfds label indices 5,6,7)
 ALL_SHAPES = ["tet", "cube", "icosa", "cone", "cyl", "tetX", "cylO", "sphereX"]  # tfds label_shape order (I + II)
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], np.float32)
@@ -38,11 +39,16 @@ def rot_z(t):
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
-def path_geometry(mats, level):
-    """(M,3,3) rotations -> the per-path tensors the head consumes, all at a fixed `level`:
+def path_geometry(mats, level, group_k=1):
+    """(M,3,3) rotations -> the per-path tensors the head consumes, at a fixed `level`.
+    group_k=1 (default): the original 8-way tree ->
         cell0 (M,) int64, child_idx (M,level) int64, child_off (M,level,8,3) f32, parent_enc (M,level,9) f32.
-    child_off[m,l] are the 8 children of sample m's level-l node, as rotation-vector offsets from that node,
-    normalised by the level's cell size; parent_enc[m,l] is that node's rotation, flattened, for conditioning."""
+    group_k>1 (abl-arity): group every k base-8 levels into one super-level of width b=8**k over the SAME equal-volume
+    leaves (requires level % group_k == 0, Ls = level//group_k super-levels) ->
+        cell0 (M,), child_idx (M,Ls) int64 in [0,b), child_off (M,Ls,b,3) f32, parent_enc (M,Ls,9) f32.
+    child_off[m,j] are the b children of sample m's super-level-j node as rotvec offsets from that node, normalised by
+    the finest cell size in the group; parent_enc[m,j] is the super-parent rotation. The density is unchanged (same
+    leaves); only the path factorisation (deep-narrow b=8 vs shallow-wide b=8**k) differs."""
     from scipy.spatial.transform import Rotation as Rot
     import so3_nested as g
     mats = np.asarray(mats, np.float64).reshape(-1, 3, 3)
@@ -54,33 +60,40 @@ def path_geometry(mats, level):
         c0, ch = g.cell_to_path(c, level)
         node[i] = g.path_node_cells(c0, ch)
         child_idx[i] = ch
-    child_off = np.empty((M, level, 8, 3), np.float32)
-    parent_enc = np.empty((M, level, 9), np.float32)
-    for l in range(level):
-        par = node[:, l]
-        chf = g.parent_to_children_cells(par, l)                       # (M,8)
-        R_par = g.cell_index_to_matrix(par, l)                         # (M,3,3)
-        R_ch = g.cell_index_to_matrix(chf, l + 1)                      # (M,8,3,3)
+    b = 8 ** group_k
+    assert level % group_k == 0, f"level {level} not divisible by group_k {group_k}"
+    Ls = level // group_k
+    child_off = np.empty((M, Ls, b, 3), np.float32)
+    parent_enc = np.empty((M, Ls, 9), np.float32)
+    for j in range(Ls):
+        p = j * group_k
+        par = node[:, p]                                               # super-parent = base cell at level p
+        chf = g.parent_to_descendant_cells(par, p, group_k)            # (M,b) descendants at level p+k
+        R_par = g.cell_index_to_matrix(par, p)                         # (M,3,3)
+        R_ch = g.cell_index_to_matrix(chf, p + group_k)               # (M,b,3,3)
         rel = np.einsum('mcij,mkj->mcik', R_ch, R_par)                 # R_child @ R_parent^T
-        rv = Rot.from_matrix(rel.reshape(-1, 3, 3)).as_rotvec().reshape(M, 8, 3)
-        child_off[:, l] = (rv / g.cell_size_rad(l + 1)).astype(np.float32)
-        parent_enc[:, l] = R_par.reshape(M, 9).astype(np.float32)
-    return node[:, 0].copy(), child_idx, child_off, parent_enc
+        rv = Rot.from_matrix(rel.reshape(-1, 3, 3)).as_rotvec().reshape(M, b, 3)
+        child_off[:, j] = (rv / g.cell_size_rad(p + group_k)).astype(np.float32)
+        parent_enc[:, j] = R_par.reshape(M, 9).astype(np.float32)
+    child_idx_s = g.regroup_children(child_idx, group_k) if group_k > 1 else child_idx
+    return node[:, 0].copy(), child_idx_s, child_off, parent_enc
 
 
-def node_children_features(node_cells, level):
-    """For beam/MAP decoding: given (M,) flat cells at `level`, return the features to score their children ->
-    child_off (M,8,3) f32 normalised offsets, parent_enc (M,9) f32, child_cells (M,8) int64."""
+def node_children_features(node_cells, level, group_k=1):
+    """For beam/MAP decoding: given (M,) flat cells at base `level`, return the features to score their children ->
+    child_off (M,b,3) f32 normalised offsets, parent_enc (M,9) f32, child_cells (M,b) int64, with b=8**group_k
+    descendants at level+group_k (group_k=1 is the original 8-way step)."""
     from scipy.spatial.transform import Rotation as Rot
     import so3_nested as g
     node_cells = np.asarray(node_cells, np.int64)
     M = node_cells.shape[0]
-    chf = g.parent_to_children_cells(node_cells, level)            # (M,8)
+    chf = g.parent_to_descendant_cells(node_cells, level, group_k)  # (M,b)
     R_par = g.cell_index_to_matrix(node_cells, level)              # (M,3,3)
-    R_ch = g.cell_index_to_matrix(chf, level + 1)                  # (M,8,3,3)
+    R_ch = g.cell_index_to_matrix(chf, level + group_k)            # (M,b,3,3)
     rel = np.einsum('mcij,mkj->mcik', R_ch, R_par)
-    rv = Rot.from_matrix(rel.reshape(-1, 3, 3)).as_rotvec().reshape(M, 8, 3)
-    return (rv / g.cell_size_rad(level + 1)).astype(np.float32), R_par.reshape(M, 9).astype(np.float32), chf
+    b = 8 ** group_k
+    rv = Rot.from_matrix(rel.reshape(-1, 3, 3)).as_rotvec().reshape(M, b, 3)
+    return (rv / g.cell_size_rad(level + group_k)).astype(np.float32), R_par.reshape(M, 9).astype(np.float32), chf
 
 
 # ------------------------------------------------------------------ stage 1: dump tfds -> PNG blob + rotations
@@ -159,18 +172,27 @@ def make_dataset_class():
         """Train: one item = (image, single-rotation path geometry). Test: one item = (image, the equivalent set's
         geometry, K ragged). Geometry is read precomputed (dumped at `meta.txt:dumped_level`) and sliced to `level`;
         a shallower level is an exact path prefix. Images are decoded from the PNG blob with PIL."""
-        def __init__(self, root, split, level, augment=False):
+        def __init__(self, root, split, level, augment=False, group_k=1):
             self.root, self.split, self.level = root, split, level
+            # abl-arity: group_k>1 factors the path into Ls=level//group_k super-levels of width b=8**group_k over the
+            # SAME leaves. Super-level geometry is computed on-the-fly from the stored rotations (the precomputed base-8
+            # geometry files are only used when group_k==1), so no new prepared tensors are needed.
+            self.group_k = int(group_k)
+            assert level % self.group_k == 0, f"level {level} not divisible by group_k {group_k}"
             # Exact in-plane roll augmentation (train only): rolling the frame by theta is an exact pose relabel
             # R -> Rz(-theta).R (optical-axis roll; convention verified empirically). The background is a uniform
             # solid and the object stays inside the inscribed circle, so a rotated frame is a genuine valid render.
             # Keeps the single-GT-rotation rule: one rotation per image, just relabelled -- no equivalent set is used.
             self.augment = bool(augment) and split == "train"
-            try:
-                dl = int(open(f"{root}/meta.txt").read().split("=")[1])
-                assert level <= dl, f"requested level {level} > dumped level {dl}; re-run prepare"
-            except FileNotFoundError:
-                pass
+            # The precomputed per-path geometry is only read when group_k==1 (base-8 tree). With group_k>1 (abl-arity)
+            # every item's super-level geometry is built on-the-fly from the raw rotations, so the dumped level is
+            # irrelevant and the check is skipped.
+            if self.group_k == 1:
+                try:
+                    dl = int(open(f"{root}/meta.txt").read().split("=")[1])
+                    assert level <= dl, f"requested level {level} > dumped level {dl}; re-run prepare"
+                except FileNotFoundError:
+                    pass
             self.png = np.load(f"{root}/{split}_png.npy", mmap_mode="r")
             self.off = np.load(f"{root}/{split}_png_off.npy")
             self.label = np.load(f"{root}/{split}_label.npy")
@@ -217,14 +239,22 @@ def make_dataset_class():
 
         def __getitem__(self, i):
             L = self.level
+            gk = self.group_k
             label = int(self.label[i])
             if self.split == "train":
                 if self.augment:
                     theta = float(np.random.uniform(0.0, 360.0))
                     img = self._norm(self._roll(self._raw(i), theta))
                     Rp = rot_z(-np.deg2rad(theta)) @ self.rot[i].astype(np.float64)    # roll relabel: Rz(-theta).R
-                    c0, ci, co, pe = path_geometry(Rp, L)
+                    c0, ci, co, pe = path_geometry(Rp, L, gk)
                     return {"image": img, "label": label,
+                            "cell0": torch.as_tensor(int(c0[0])),
+                            "child_idx": torch.from_numpy(ci[0]),
+                            "child_off": torch.from_numpy(co[0]),
+                            "parent_enc": torch.from_numpy(pe[0])}
+                if gk > 1:                                                             # on-the-fly super-level geometry
+                    c0, ci, co, pe = path_geometry(self.rot[i].astype(np.float64), L, gk)
+                    return {"image": self._img(i), "label": label,
                             "cell0": torch.as_tensor(int(c0[0])),
                             "child_idx": torch.from_numpy(ci[0]),
                             "child_off": torch.from_numpy(co[0]),
@@ -236,6 +266,12 @@ def make_dataset_class():
                         "parent_enc": torch.from_numpy(np.array(self.parent_enc[i, :L]))}
             img = self._img(i)
             a, b = int(self.equiv_off[i]), int(self.equiv_off[i + 1])
+            if gk > 1:                                                                # on-the-fly super-level geometry
+                em = np.asarray(self.equiv_mats[a:b], np.float64)
+                c0, ci, co, pe = path_geometry(em, L, gk)
+                return {"image": img, "label": label,
+                        "cell0": torch.from_numpy(c0), "child_idx": torch.from_numpy(ci),
+                        "child_off": torch.from_numpy(co), "parent_enc": torch.from_numpy(pe)}
             return {"image": img, "label": label,
                     "cell0": torch.from_numpy(np.array(self.cell0[a:b])),              # (K,)
                     "child_idx": torch.from_numpy(np.array(self.child_idx[a:b, :L])),  # (K,level)

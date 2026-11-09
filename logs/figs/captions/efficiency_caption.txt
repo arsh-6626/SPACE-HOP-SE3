@@ -1,0 +1,9 @@
+% Figure: efficiency.pdf
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figs/efficiency.pdf}
+  \caption{\textbf{Exact likelihood in $O(L)$.} A NeST likelihood scores only the $L{+}1\approx7$ nodes on a pose's
+  path ($8L=48$ child evaluations), versus the ${\sim}2.36$M grid cells an implicit full-grid model (IPDF)
+  evaluates---about four to five orders of magnitude fewer evaluations, with no loss of exact normalization.}
+  \label{fig:efficiency}
+\end{figure}

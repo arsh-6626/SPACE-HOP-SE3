@@ -1,0 +1,26 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_arch_net.pdf}
+  \caption{\textbf{NeST architecture.} A ViT-B/16 encoder (augreg2, fine-tuned at
+  lr $10^{-5}$) turns the crop into patch tokens $X\in\mathbb{R}^{196\times768}$,
+  which act as the keys/values for a tree-structured softmax over the
+  $SO(3)\times\mathbb{R}^3$ partition of \texttt{se3\_tree.py}. The \emph{root head}
+  ($l0\_attn$) lets $72$ learned queries cross-attend to $X$ and emits the
+  $72$-way rotation-root categorical $p_0(c_0\mid x)$. The \emph{child head}
+  ($child\_attn$, one set of weights reused at every level $\ell$) builds its
+  queries from the $6$-D child offset $[\text{rot}(3),\text{trans}(3)]$ and the
+  $12$-D parent code $[R(9),\hat g(3)]$ via a Fourier encoding and \texttt{child\_proj}
+  plus a level embedding, cross-attends to the same $X$, and emits the $64$-way
+  child categorical $p(c_\ell\mid\text{path},x)$ ($64=8$ rotation $\times\,8$
+  translation octants). Both heads are the same two-layer cross-attention block
+  with separate weights and a zero-initialised output linear. The chosen cell's
+  code feeds the next level, so decoding is autoregressive over depth
+  ($\ell=1..5$). The path log-likelihood sums the root and child log-softmaxes, so
+  $p(R,t)$ is a normalized SE(3) density by construction, exact up to the constant
+  $N/(V_{SO(3)}V_{\text{box}})$; zero-init starts the network exactly at the uniform
+  floor $-\ln(\pi^2 V_{\text{box}})$. The leaf cell reads out $R$ (cell centre) and
+  $t=\hat t + A\,g$. Everything shown is a single real forward pass (YCB-V object 3,
+  scene 51/1629): the attention overlays, the $72$-way HEALPix root panel, and the
+  $8\times8$ child-softmax heatmap are the network's genuine tensors.}
+  \label{fig:nest_arch}
+\end{figure*}

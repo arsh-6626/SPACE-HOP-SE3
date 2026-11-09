@@ -1,0 +1,58 @@
+#!/bin/bash
+#PBS -N tless_se3
+#PBS -P hpc.dtu.kavinder
+#PBS -q scai_q
+#PBS -l select=1:ncpus=16:ngpus=1
+#PBS -l walltime=12:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/tless_se3.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/tless_se3.err
+# NeST SE(3) per-object T-LESS trainer (src/se3_tless_train.py).
+# Reads the BOP T-LESS tree IN PLACE from the liepose project scratch (read-only);
+# writes cache + checkpoints under the SPACE-HOP scratch only.
+# Resume-aware: continues from $RUN/last.pth if present. Pass the object via `qsub -v OBJ=<n>`.
+set -u
+OBJ="${OBJ:-1}"
+TAG="${TAG:-}"                 # e.g. TAG=_aug -> separate checkpoint dir from the no-aug ablation
+AUG="${AUG:-}"                 # AUG=1 -> pass --augment (in-plane viewing-axis roll relabel, fixes collapse)
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+BOP=/scratch/hpc/visitor/dtu001.visitor/liepose/data/bop_datasets/tless   # READ ONLY
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python                # shared venv: use, never modify
+CACHE=$ROOT/cache/tless_se3
+RUN=$ROOT/checkpoints/se3_tless${TAG}_obj${OBJ}
+AUGF=""; [ "$AUG" = 1 ] && AUGF="--augment"
+LOG=$RUN/train_hpc.log
+mkdir -p $CACHE $RUN $ROOT/logs
+# healpy lives in a side dir we own (le-wm has torch but not healpy); add our src too.
+export PYTHONPATH=$ROOT/pylib:$ROOT/src:${PYTHONPATH:-}
+export XDG_CACHE_HOME=$ROOT/cache/xdg HF_HOME=$ROOT/cache/hf TORCH_HOME=$ROOT/cache/torch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1   # cluster has no internet; backbone is pre-shipped
+export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 PYTHONUNBUFFERED=1
+cd $ROOT
+echo "=== $(date) job $PBS_JOBID obj $OBJ on $(hostname)" | tee -a $LOG
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | tee -a $LOG
+$PY -c "import torch,healpy,timm;print('torch',torch.__version__,'healpy',healpy.__version__,'timm',timm.__version__)" 2>&1 | tee -a $LOG
+
+# 1) Build the per-object index caches if missing (pure numpy/json/PIL; no GPU, no healpy).
+for SPLIT in train_pbr test_primesense; do
+  if [ ! -f "$CACHE/${SPLIT}_obj${OBJ}.npz" ]; then
+    echo "=== $(date) indexing $SPLIT obj $OBJ" | tee -a $LOG
+    $PY src/se3_tless_data.py index --root $BOP --out $CACHE --objs $OBJ --split $SPLIT >> $LOG 2>&1
+  fi
+done
+
+# 2) Train (resume if a checkpoint exists). 40k steps, bs 48, matches the local protocol.
+# Hard CUDA guard: on the standard queue a node's driver could be too old for torch cu130, or the trainer could
+# silently fall to CPU and burn the whole walltime. Fail fast instead.
+# No CUDA here = faulted/invisible GPU (e.g. scai04). This PBS forbids node-pinning, so PARK the node:
+# sleep ~25min holding it so the next unpinned submit gets a healthy node, then exit 3 (topper resubmits).
+$PY -c "import torch,sys;sys.exit(0 if torch.cuda.is_available() else 3)" || { echo "=== FATAL no CUDA on $(hostname) -> parking faulted node ~25min ===" | tee -a $LOG; sleep 1500; exit 3; }
+if [ -f "$RUN/COMPLETE" ]; then echo "obj $OBJ already COMPLETE -> nothing to do" | tee -a $LOG; exit 0; fi
+RESUME=""; [ -f "$RUN/last.pth" ] && RESUME="--resume $RUN/last.pth" && echo "resuming from $RUN/last.pth" | tee -a $LOG
+$PY src/se3_tless_train.py train \
+    --root $BOP --cache $CACHE --obj $OBJ --out $RUN $AUGF \
+    --L_rot 5 --L_trans 5 --steps 40000 --bs 48 --workers 14 \
+    --save_every 2500 --eval_every 2000 --test_that gt $RESUME >> $LOG 2>&1
+rc=$?
+if [ $rc -eq 0 ]; then touch $RUN/COMPLETE; echo "=== $(date) TLESS_OBJ${OBJ}_DONE rc=0" | tee -a $LOG;
+else echo "=== $(date) TLESS_OBJ${OBJ}_EXIT rc=$rc (resume by re-qsub)" | tee -a $LOG; fi
+exit $rc

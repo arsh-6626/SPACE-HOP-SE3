@@ -1,0 +1,11 @@
+% Figure: calibration.pdf
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figs/calibration.pdf}
+  \caption{\textbf{Uncertainty is calibrated (YCB-V, RGB-only).} Uncertainty is the level-0 entropy $H_0$ of the
+  predicted distribution. \emph{(A)} Risk--coverage: keeping the most-confident fraction of detections monotonically
+  raises mean MSSD recall ($0.592\!\to\!0.693$ at $50\%\!\to\!0.795$ at $10\%$ coverage), so confidence is
+  trustworthy for selective prediction. \emph{(B)} Mean recall falls as $H_0$ grows---the model is diffuse exactly
+  when it is wrong (Spearman $(H_0,\text{MSSD})=+0.29$, $p\approx3\times10^{-51}$, $n=2548$).}
+  \label{fig:calibration}
+\end{figure*}

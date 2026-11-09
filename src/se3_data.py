@@ -47,6 +47,14 @@ def quat_wxyz_to_mat(q):
 
 # ---------------------------------------------------------------- prepare (needs healpy via so3_nested) ----
 
+def rot_z(t):
+    """Rotation by angle t (rad) about the optical axis (z), for the in-plane roll relabel.
+    An image rolled CCW by theta corresponds to the pose relabel R -> rot_z(-theta) R, t -> rot_z(-theta) t
+    (convention verified empirically in symsol_data for SYMSOL-I; re-verified for SYMSOL-T by the roll self-test)."""
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
 def prepare(root, out, L_rot, L_trans, box_half=1.0, splits=("train", "test")):
     """Precompute path geometry for the SYMSOL-T dataset at `root` into `out`, at depth (L_rot, L_trans)."""
     import se3_head as sh
@@ -75,6 +83,8 @@ def prepare(root, out, L_rot, L_trans, box_half=1.0, splits=("train", "test")):
                 np.save(f"{out}/train_target_l{l}.npy", lv["target"])
             np.save(f"{out}/train_label.npy", labels)
             np.save(f"{out}/train_imgpaths.npy", imgpaths)
+            np.save(f"{out}/train_rot.npy", mats.astype(np.float32))   # raw single-GT R, for on-the-fly roll relabel
+            np.save(f"{out}/train_g.npy", gs.astype(np.float32))       # raw normalized-cube translation g=t/(2h)
             print(f"[prepare] train: {I} images, single GT, L=({L_rot},{L_trans})", flush=True)
         else:
             # expand the equivalent rotations (same translation) per image
@@ -107,10 +117,19 @@ def prepare(root, out, L_rot, L_trans, box_half=1.0, splits=("train", "test")):
             np.save(f"{out}/test_t.npy", t_per_img.astype(np.float32))
             print(f"[prepare] test: {I} images, {len(mats)} equivalents total, L=({L_rot},{L_trans})", flush=True)
 
-    with open(f"{out}/meta.json", "w") as f:
+    # Merge per-split image roots so preparing one split (e.g. test) never clobbers another's root (train and test
+    # may live in different render dirs). img_root kept for back-compat; img_roots[split] is authoritative.
+    meta_path = f"{out}/meta.json"
+    img_roots = {}
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            img_roots = json.load(f).get("img_roots", {})
+    for split in splits:
+        img_roots[split] = os.path.abspath(root)
+    with open(meta_path, "w") as f:
         json.dump({"L_rot": L_rot, "L_trans": L_trans, "box_half": box_half, "kinds": kinds,
-                   "img_root": os.path.abspath(root)}, f)
-    print(f"[prepare] wrote meta.json (kinds={kinds})", flush=True)
+                   "img_root": os.path.abspath(root), "img_roots": img_roots}, f)
+    print(f"[prepare] wrote meta.json (kinds={kinds}, img_roots={list(img_roots)})", flush=True)
 
 
 # ---------------------------------------------------------------- dataset (torch) ----
@@ -127,17 +146,28 @@ def make_dataset_class():
     class Symsolt(Dataset):
         """Train item = (image, single-GT path geometry). Test is accessed via item()/equiv geometry per image.
         Images are decoded from PNG on the fly (dataset is small and on local SSD)."""
-        def __init__(self, out, split):
+        def __init__(self, out, split, augment=False):
             self.out, self.split = out, split
             self.meta = load_meta(out)
-            self.L = max(self.meta["L_rot"], self.meta["L_trans"])
-            self.img_root = self.meta["img_root"]
+            self.L_rot, self.L_trans = self.meta["L_rot"], self.meta["L_trans"]
+            self.L = max(self.L_rot, self.L_trans)
+            self.img_root = self.meta.get("img_roots", {}).get(split, self.meta["img_root"])
             self.label = np.load(f"{out}/{split}_label.npy")
             self.imgpaths = np.load(f"{out}/{split}_imgpaths.npy", allow_pickle=True)
             self.cell0 = np.load(f"{out}/{split}_cell0.npy", mmap_mode="r")
             self.childoff = [np.load(f"{out}/{split}_childoff_l{l}.npy", mmap_mode="r") for l in range(self.L)]
             self.parent = [np.load(f"{out}/{split}_parent_l{l}.npy", mmap_mode="r") for l in range(self.L)]
             self.target = [np.load(f"{out}/{split}_target_l{l}.npy", mmap_mode="r") for l in range(self.L)]
+            # exact in-plane roll augmentation (train only): roll the frame by theta and relabel the single GT pose
+            # R -> rot_z(-theta) R, g -> rot_z(-theta) g. Keeps the single-GT rule (no equivalent set). rot_z preserves
+            # the xy-radius, so theta is rejection-sampled to keep g in the cube box, with 90-degree multiples (which
+            # always map the square box to itself, crop-free) as the guaranteed-valid fallback.
+            self.augment = bool(augment) and split == "train"
+            if self.augment:
+                import se3_head as _sh
+                self._build_geometry = _sh.build_geometry
+                self.rot = np.load(f"{out}/train_rot.npy")   # (N,3,3)
+                self.g = np.load(f"{out}/train_g.npy")       # (N,3)
             if split == "test":
                 self.equiv_off = np.load(f"{out}/test_equiv_off.npy")
                 self.equiv_R = np.load(f"{out}/test_equiv_R.npy", mmap_mode="r")
@@ -146,12 +176,61 @@ def make_dataset_class():
         def __len__(self):
             return len(self.label)
 
-        def _img(self, path):
+        def _raw(self, path):
             from PIL import Image
-            arr = np.asarray(Image.open(os.path.join(self.img_root, path)).convert("RGB"), np.uint8)
+            return np.asarray(Image.open(os.path.join(self.img_root, path)).convert("RGB"), np.uint8)
+
+        def _norm(self, arr):
             x = arr.astype(np.float32) / 255.0
             x = (x - IMAGENET_MEAN) / IMAGENET_STD
             return torch.from_numpy(x.transpose(2, 0, 1).copy())
+
+        def _img(self, path):
+            return self._norm(self._raw(path))
+
+        def _roll(self, arr, theta_deg):
+            """Rotate the frame CCW by theta_deg about its centre, filling exposed corners with the (uniform)
+            background median colour. Returns the rolled uint8 frame."""
+            from PIL import Image
+            corners = np.concatenate([arr[:8, :8].reshape(-1, 3), arr[:8, -8:].reshape(-1, 3),
+                                      arr[-8:, :8].reshape(-1, 3), arr[-8:, -8:].reshape(-1, 3)])
+            bg = tuple(int(v) for v in np.median(corners, 0))
+            return np.asarray(Image.fromarray(arr).rotate(theta_deg, resample=Image.BILINEAR, fillcolor=bg), np.uint8)
+
+        def _sample_theta(self, g):
+            """Pick an in-plane roll theta (deg) whose relabel rot_z(-theta) g stays in the cube box [-0.5,0.5]^3.
+            rot_z preserves the xy-radius, so small-radius samples accept any theta; otherwise rejection-sample a few
+            times, then fall back to a random 90-degree multiple (always exact and in-box on a square frame)."""
+            gx, gy = float(g[0]), float(g[1])
+            r = (gx * gx + gy * gy) ** 0.5
+            if r <= 0.5:                                  # any angle keeps |gx'|,|gy'| <= r <= 0.5
+                return float(np.random.uniform(0.0, 360.0))
+            for _ in range(8):
+                th = float(np.random.uniform(0.0, 360.0))
+                a = np.deg2rad(-th); c, s = np.cos(a), np.sin(a)
+                if abs(c * gx - s * gy) <= 0.5 and abs(s * gx + c * gy) <= 0.5:
+                    return th
+            return float(np.random.choice([0.0, 90.0, 180.0, 270.0]))
+
+        def _aug_item(self, i):
+            theta = self._sample_theta(self.g[i])
+            img = self._norm(self._roll(self._raw(self.imgpaths[i]), theta))
+            Rz = rot_z(-np.deg2rad(theta))
+            Rp = (Rz @ self.rot[i].astype(np.float64)).reshape(1, 3, 3)
+            gp = (Rz @ self.g[i].astype(np.float64)).reshape(1, 3)
+            geom = self._build_geometry(Rp, gp, self.L_rot, self.L_trans)
+            lv = geom["levels"]
+            out = {"image": img, "label": int(self.label[i]),
+                   "cell0": torch.as_tensor(int(geom["cell0"][0])),
+                   "child_off6": torch.as_tensor(np.stack([lv[l]["child_off6"][0] for l in range(self.L)])),
+                   "parent12": torch.as_tensor(np.stack([lv[l]["parent12"][0] for l in range(self.L)])),
+                   "target": torch.as_tensor(np.stack([int(lv[l]["target"][0]) for l in range(self.L)]))}
+            if "refine" in geom:   # continuous within-cell GT residual targets for the refinement head
+                r = geom["refine"]
+                out["refine_code12"] = torch.as_tensor(r["code12"][0])
+                out["refine_rot_resid"] = torch.as_tensor(r["rot_resid"][0])
+                out["refine_g_resid"] = torch.as_tensor(r["g_resid"][0])
+            return out
 
         def _levels_rows(self, rows):
             """Assemble the head's `levels` list for the given geometry row indices (int or slice/array)."""
@@ -161,6 +240,8 @@ def make_dataset_class():
 
         def __getitem__(self, i):
             # train: one geometry row per image (row index == image index)
+            if self.augment:
+                return self._aug_item(i)
             img = self._img(self.imgpaths[i])
             lv = self._levels_rows(i)
             return {"image": img, "label": int(self.label[i]),
@@ -197,6 +278,10 @@ def collate_train(batch):
            "levels": [{"child_off6": torch.stack([b["child_off6"][l] for b in batch]),
                        "parent12": torch.stack([b["parent12"][l] for b in batch]),
                        "target": torch.stack([b["target"][l] for b in batch])} for l in range(L)]}
+    if "refine_code12" in batch[0]:
+        out["refine"] = {"code12": torch.stack([b["refine_code12"] for b in batch]),
+                         "rot_resid": torch.stack([b["refine_rot_resid"] for b in batch]),
+                         "g_resid": torch.stack([b["refine_g_resid"] for b in batch])}
     return out
 
 

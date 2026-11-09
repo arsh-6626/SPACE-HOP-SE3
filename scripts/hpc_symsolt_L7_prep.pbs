@@ -1,0 +1,44 @@
+#!/bin/bash
+#PBS -N symt_L7_prep
+#PBS -P hpc.dtu.kavinder
+#PBS -q standard
+#PBS -l select=1:ncpus=12:mem=48gb:centos=icelake
+#PBS -l walltime=04:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/symt_L7_prep.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/symt_L7_prep.err
+# CPU-only prepare of the L=(7,7) SYMSOL-T geometry. Split out from the GPU train job so (a) it schedules
+# immediately on an idle icelake CPU slot instead of waiting for a saturated GPU, (b) the never-run L7 geometry
+# path is exercised TODAY (catches shape/mem issues before a long GPU queue), and (c) the GPU job spends none
+# of its allocation on prepare. centos=icelake => glibc 2.34 => le-wm imports (verified aice001/cice001).
+set -u
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+DATA=$ROOT/data/symsolt
+GEOM=$ROOT/data/symsolt_geom_L7
+LOG=$ROOT/logs/symt_L7_prep.log
+mkdir -p $GEOM $ROOT/logs
+export PYTHONPATH=$ROOT/pylib:$ROOT/src:${PYTHONPATH:-}
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export OMP_NUM_THREADS=12 PYTHONUNBUFFERED=1
+cd $ROOT
+echo "=== $(date) L7 prepare on $(hostname)" | tee -a $LOG
+$PY -c "import numpy,healpy;print('numpy',numpy.__version__,'healpy',healpy.__version__)" 2>&1 | tee -a $LOG
+
+if [ ! -f "$GEOM/train_cell0.npy" ]; then
+  echo "=== $(date) prepare L7 train" | tee -a $LOG
+  $PY src/se3_data.py prepare --root $DATA/train-45k --out $GEOM --L_rot 7 --L_trans 7 --splits train >> $LOG 2>&1
+fi
+if [ ! -f "$GEOM/test_cell0.npy" ]; then
+  echo "=== $(date) prepare L7 test" | tee -a $LOG
+  $PY src/se3_data.py prepare --root $DATA/test-5k --out $GEOM --L_rot 7 --L_trans 7 --splits test >> $LOG 2>&1
+fi
+
+if [ -f "$GEOM/train_cell0.npy" ] && [ -f "$GEOM/test_cell0.npy" ]; then
+  touch $GEOM/PREP_COMPLETE
+  echo "=== $(date) L7_PREP_DONE" | tee -a $LOG
+  ls -la $GEOM | tee -a $LOG
+  exit 0
+else
+  echo "=== $(date) L7_PREP_FAILED (missing cell0 outputs)" | tee -a $LOG
+  exit 1
+fi

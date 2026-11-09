@@ -1,0 +1,27 @@
+#!/bin/bash
+# Generic SPACE-HOP SYMSOL training job. Parameterize via `qsub -v RUN=...,DATADIR=...,STEPS=...,BS=...,LEVEL=...,EXTRA=...`
+# Override queue / walltime / host / -o / -e on the qsub command line. Resumable: resubmitting continues from last.pth.
+#PBS -N spacehop
+#PBS -P hpc.dtu.kavinder
+#PBS -l select=1:ncpus=8:ngpus=1
+#PBS -l walltime=120:00:00
+set -u
+B=/scratch/hpc/visitor/dtu001.visitor
+cd "$B/spacehop_paper"
+export HF_HOME="$B/symsol_stage/hf_cache"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export TORCH_HOME="$B/final_submission/common/torch_home"
+export XDG_CACHE_HOME="$B/spacehop_paper/xdg_cache"
+export OMP_NUM_THREADS=8
+mkdir -p "$XDG_CACHE_HOME" "checkpoints/${RUN}"
+echo "=== $(date '+%F %T') RUN=$RUN on $(hostname) ==="
+nvidia-smi --query-gpu=name,driver_version,memory.total,memory.used --format=csv
+PY="$B/symsol-venv/bin/python"
+OUT="checkpoints/${RUN}"
+RES=""; [ -f "$OUT/last.pth" ] && RES="--resume $OUT/last.pth"
+echo "launch: --data $DATADIR --out $OUT --level ${LEVEL:-5} --steps ${STEPS:-60000} --bs ${BS:-64} $RES ${EXTRA:-}"
+$PY src/symsol_train.py train \
+    --data "$DATADIR" --out "$OUT" \
+    --level "${LEVEL:-5}" --steps "${STEPS:-60000}" --bs "${BS:-64}" --workers 8 \
+    $RES ${EXTRA:-}
+echo "SPACEHOP_DONE RUN=$RUN rc=$?"

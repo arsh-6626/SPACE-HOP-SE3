@@ -126,6 +126,36 @@ def cell_size_rad(level):
     return (V_SO3 / n_cells(level)) ** (1.0 / 3.0)
 
 
+# ---------------------------------------------------------------- arity / branching-factor regrouping (abl-arity)
+
+def parent_to_descendant_cells(parent_cells, parent_level, k):
+    """(M,) flat cells at `parent_level` -> (M, 8**k) flat DESCENDANT cells at parent_level+k.
+    Descendant index d in [0, 8**k) has base-8 digits d = c_0*8^(k-1) + c_1*8^(k-2) + ... + c_{k-1}, i.e. applying
+    base-8 child c_0 first (most significant) ... c_{k-1} last. This is the width-b=8**k 'super-level' child set: the
+    same equal-volume leaves as k successive 8-way splits, just enumerated as one b-way partition of the parent cell.
+    With k=1 it is exactly parent_to_children_cells."""
+    cur = np.asarray(parent_cells, np.int64).reshape(-1, 1)
+    for s in range(k):
+        ch = parent_to_children_cells(cur.reshape(-1), parent_level + s)     # (M*W, 8)
+        cur = ch.reshape(cur.shape[0], -1)                                   # (M, 8**(s+1)) ordered c_0..c_s
+    return cur
+
+
+def regroup_children(children, group_k):
+    """(M, level) base-8 child digits -> (M, level//group_k) super-level digits in [0, 8**group_k).
+    super[j] = sum_{m=0}^{k-1} children[:, j*k+m] * 8**(k-1-m)  (first base child = most significant), matching the
+    ordering of parent_to_descendant_cells. Requires level % group_k == 0."""
+    children = np.asarray(children, np.int64)
+    L = children.shape[-1]
+    assert L % group_k == 0, f"level {L} not divisible by group_k {group_k}"
+    Ls = L // group_k
+    w = (8 ** np.arange(group_k - 1, -1, -1)).astype(np.int64)               # (k,) positional weights, MSB first
+    out = np.empty((*children.shape[:-1], Ls), np.int64)
+    for j in range(Ls):
+        out[..., j] = (children[..., j * group_k:(j + 1) * group_k] * w).sum(-1)
+    return out
+
+
 def ceiling_loglik(equiv_mats, level):
     """Best achievable avg log-lik for a target uniform over the occupied finest cells of an equivalent set.
     equiv_mats (K,3,3) -> log(N / (n_occupied * V_SO3)). The symmetry ceiling for a shape at this level."""

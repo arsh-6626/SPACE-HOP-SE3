@@ -47,8 +47,9 @@ TRANS_OCT_OFF = _OCT_BITS - 0.5                                      # (8,3) in 
 class _CrossAttn(nn.Module):
     """Query tokens cross-attend to the frozen patch tokens, then an MLP; final linear zero-init so nodes start
     uniform. Identical to symsol_head._CrossAttn."""
-    def __init__(self, embed_dim, n_layers=2, heads=8):
+    def __init__(self, embed_dim, n_layers=2, heads=8, out_dim=1):
         super().__init__()
+        self.out_dim = out_dim
         self.kv_norm = nn.LayerNorm(embed_dim)
         self.layers = nn.ModuleList(nn.ModuleDict({
             'n1': nn.LayerNorm(embed_dim),
@@ -56,7 +57,7 @@ class _CrossAttn(nn.Module):
             'n2': nn.LayerNorm(embed_dim),
             'mlp': nn.Sequential(nn.Linear(embed_dim, 4 * embed_dim), nn.GELU(), nn.Linear(4 * embed_dim, embed_dim)),
         }) for _ in range(n_layers))
-        self.out = nn.Sequential(nn.LayerNorm(embed_dim), nn.Linear(embed_dim, 1))
+        self.out = nn.Sequential(nn.LayerNorm(embed_dim), nn.Linear(embed_dim, out_dim))
         nn.init.zeros_(self.out[1].weight); nn.init.zeros_(self.out[1].bias)
 
     def forward(self, q, patches):
@@ -64,7 +65,8 @@ class _CrossAttn(nn.Module):
         for L in self.layers:
             q = q + L['attn'](L['n1'](q), kv, kv, need_weights=False)[0]
             q = q + L['mlp'](L['n2'](q))
-        return self.out(q).squeeze(-1)                              # (B, Nq)
+        o = self.out(q)                                            # (B, Nq, out_dim)
+        return o.squeeze(-1) if self.out_dim == 1 else o           # (B, Nq) or (B, Nq, out_dim)
 
 
 class Se3DensityHead(nn.Module):
@@ -113,6 +115,25 @@ class Se3DensityHead(nn.Module):
         Returns (loss, logp_cell) with logp_cell detached for logging."""
         lp = self.path_loglik(patches, batch['cell0'], batch['levels'])
         return (-lp).mean(), lp.detach()
+
+
+class RefineHead(nn.Module):
+    """Continuous within-cell residual regressor that lifts the beam-MAP point estimate off the finest-cell centre
+    (the readout-resolution cap). Given the patches and the finest joint cell's code [R_fin flat(9), trans-cell
+    centre(3)], it predicts (Δrotvec(3), Δg(3)) in units of the finest cell size. Zero-init output => it starts
+    EXACTLY at the cell centre, so adding it never hurts the from-scratch model; training moves the estimate inside
+    the cell. Decode: R = Exp(Δrotvec * cell_size_rad(L_rot)) @ R_fin ; g = g_fin_ctr + Δg * (1/2^L_trans)."""
+    def __init__(self, embed_dim=768, n_freq=3, n_layers=2, heads=8):
+        super().__init__()
+        self.n_freq = n_freq
+        code_dim = 12 + 24 * n_freq                                 # fourier_encode([R_fin flat(9), trans ctr(3)])
+        self.q_proj = nn.Sequential(nn.Linear(code_dim, embed_dim), nn.GELU(), nn.Linear(embed_dim, embed_dim))
+        self.attn = _CrossAttn(embed_dim, n_layers, heads, out_dim=6)
+
+    def forward(self, patches, code12):
+        """patches (B,P,D), code12 (B,12) -> residual (B,6) = [Δrotvec(3), Δg(3)] in finest-cell-size units."""
+        q = self.q_proj(fourier_encode(code12, self.n_freq)).unsqueeze(1)      # (B,1,D)
+        return self.attn(q, patches).squeeze(1)                                # (B,6)
 
 
 # ---------------------------------------------------------------- geometry builder (numpy; mirrors symsol_data) ----
@@ -193,7 +214,18 @@ def build_geometry(mats, gs, L_rot, L_trans):
             parent12 = np.concatenate([R_fin_flat, trans_parent_ctr[:, ti]], -1).astype(np.float32)
             target = trans_octs[:, ti].astype(np.int64)
         levels.append({'kind': kind, 'child_off6': child_off6, 'parent12': parent12, 'target': target})
-    return {'cell0': cell0.astype(np.int64), 'levels': levels}
+
+    # ---- refinement targets: continuous GT residual within the finest joint cell + the finest-cell code
+    R_fin = R_fin_flat.reshape(M, 3, 3).astype(np.float64)
+    rel_fin = np.einsum('mij,mkj->mik', mats, R_fin)                            # R_gt @ R_fin^T
+    cs = so3.cell_size_rad(L_rot) if L_rot > 0 else 1.0
+    rot_resid = (Rot.from_matrix(rel_fin).as_rotvec() / cs).astype(np.float32)  # (M,3) in finest-cell units
+    edge = (1.0 / (2 ** L_trans)) if L_trans > 0 else 1.0
+    g_resid = ((gs - trans_fin_ctr) / edge).astype(np.float32)                  # (M,3) in finest-cell units
+    code12 = np.concatenate([R_fin_flat, trans_fin_ctr], -1).astype(np.float32)  # (M,12)
+    refine = {'code12': code12, 'rot_resid': rot_resid, 'g_resid': g_resid,
+              'cell_size_rad': np.float32(cs), 'trans_edge': np.float32(edge)}
+    return {'cell0': cell0.astype(np.int64), 'levels': levels, 'refine': refine}
 
 
 def to_torch(geom, device):
@@ -202,6 +234,12 @@ def to_torch(geom, device):
                        'child_off6': torch.as_tensor(lv['child_off6'], device=device),
                        'parent12': torch.as_tensor(lv['parent12'], device=device),
                        'target': torch.as_tensor(lv['target'], device=device)} for lv in geom['levels']]}
+    if 'refine' in geom:
+        r = geom['refine']
+        out['refine'] = {'code12': torch.as_tensor(r['code12'], device=device),
+                         'rot_resid': torch.as_tensor(r['rot_resid'], device=device),
+                         'g_resid': torch.as_tensor(r['g_resid'], device=device),
+                         'cell_size_rad': float(r['cell_size_rad']), 'trans_edge': float(r['trans_edge'])}
     return out
 
 

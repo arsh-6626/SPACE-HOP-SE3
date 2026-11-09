@@ -1,0 +1,13 @@
+% Figure: method.pdf
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figs/method.pdf}
+  \caption{\textbf{NeST: a tree-structured softmax over an equivolumetric partition is an exactly-normalized
+  density.} An image $x$ is encoded to patch tokens that condition a categorical at every node of the
+  Hopf--HEALPix partition tree: a $72$-way root softmax and an $8$-way softmax at each refinement. The density of a
+  rotation is the product of the softmaxes along its root-to-leaf path times $N/V$. Because every node's children
+  are equal Haar-volume, $\int p(R\mid x)\,\mathrm{d}R=1$ for \emph{any} network outputs (exact normalization), the
+  uniform is recovered exactly ($-\ln\pi^2$), and the likelihood of any pose is read off by scoring only $L{+}1$
+  nodes ($O(L)$) rather than a full grid.}
+  \label{fig:method}
+\end{figure*}

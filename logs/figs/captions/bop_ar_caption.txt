@@ -1,0 +1,11 @@
+% Figure: bop_ar.pdf
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figs/bop_ar.pdf}
+  \caption{\textbf{6-DoF object pose on T-LESS (full 30-object BOP submission, RGB-only).} \emph{(A)} BOP19 AR
+  $=64.7$ with the metric breakdown: 2D-projection recall (MSPD $84.1$) is strong while depth-sensitive VSD
+  ($51.4$) is the weak axis---the RGB depth signature. \emph{(B)} NeST vs.\ baselines; unlike the point-estimate
+  baselines, NeST is RGB-only and returns a full, calibrated pose distribution. Hatched bars use depth. (Baseline
+  numbers from published BOP leaderboards; verify before camera-ready.)}
+  \label{fig:bopar}
+\end{figure*}

@@ -51,15 +51,24 @@ def _trans_children(cell, level):
 # ---------------------------------------------------------------- beam-MAP ----
 
 @torch.no_grad()
-def beam_map(head, patches, L_rot, L_trans, beam=64):
+def beam_map(head, patches, L_rot, L_trans, beam=64, return_beam=False, roots=None):
     """patches (P,D) for ONE image -> (rot_cell_fin, trans_cell_fin, logp_cell) of the beam-MAP finest joint cell.
-    beam is the number of nodes kept at every level; beam>=72 and kept-all children == exhaustive."""
+    beam is the number of nodes kept at every level; beam>=72 and kept-all children == exhaustive.
+    With return_beam=True, append the full final-beam absolute log-probs (sorted desc, len<=beam) as a 4th value
+    -- used by the uncertainty diagnostic to read a concentration scalar (captured mass, effective modes) off the
+    MAP posterior.  The 3-tuple callers (map_pose etc.) are unaffected when return_beam is False.
+    roots: if given, an array of level-0 ROTATION cells to start the beam from (instead of the global top-B of
+    logp0) -- lets a caller descend ONE coarse-rotation basin to get that basin's MAP (multi-hypothesis seeding).
+    The returned logp is still the absolute log-prob of each kept cell (comparable across basins)."""
     device = patches.device
     P, D = patches.shape
     L = max(L_rot, L_trans)
     # level 0: 72 rotation root cells (translation root is the single cell 0)
     lp0 = head.logp0(patches[None])[0].cpu().numpy()                          # (72,)
-    order = np.argsort(-lp0)[:beam]
+    if roots is not None:
+        order = np.asarray(roots, np.int64)
+    else:
+        order = np.argsort(-lp0)[:beam]
     rot_cell = order.astype(np.int64)                                         # (B,) at rot level 0
     trans_cell = np.zeros(len(order), np.int64)                               # (B,) at trans level 0
     logp = lp0[order].astype(np.float64)
@@ -111,6 +120,9 @@ def beam_map(head, patches, L_rot, L_trans, beam=64):
             rl += 1
         if kind in ('joint64', 'trans8'):
             tl += 1
+    if return_beam:
+        srt = np.argsort(-logp)
+        return int(rot_cell[0]), int(trans_cell[0]), float(logp[0]), logp[srt].astype(np.float64)
     return int(rot_cell[0]), int(trans_cell[0]), float(logp[0])
 
 
@@ -127,6 +139,27 @@ def _geo_deg(R_map, R_set):
     """min geodesic angle (deg) between R_map (3,3) and any R in R_set (K,3,3)."""
     tr = np.einsum('ij,kij->k', R_map, R_set)                                # trace(R_map^T R_k) = sum R_map*R_k
     return float(np.degrees(np.arccos(np.clip((tr - 1.0) / 2.0, -1.0, 1.0))).min())
+
+
+@torch.no_grad()
+def map_pose_refined(head, refine_head, patches, L_rot, L_trans, A, t_hat, beam=64):
+    """Beam-MAP finest cell + RefineHead within-cell residual -> continuous (R, t), lifting the point estimate off
+    the cell centre (removes the readout-resolution cap). refine_head predicts (drotvec, dg) in finest-cell-size
+    units from patches + the finest-cell code12 [R_fin flat(9), trans-cell centre(3)]; decode mirrors se3_head's
+    docstring: R = Exp(drotvec*cell_size_rad(L_rot)) @ R_fin ; g = g_ctr + dg*(1/2^L_trans)."""
+    from scipy.spatial.transform import Rotation as Rot
+    rc, tc, lp = beam_map(head, patches, L_rot, L_trans, beam)
+    R_fin = so3.cell_index_to_matrix(np.array([rc]), L_rot)[0]               # (3,3)
+    g_ctr = se3.trans_cell_center(np.array([tc]), L_trans)[0]                # (3,)
+    code12 = torch.as_tensor(np.concatenate([R_fin.reshape(9), g_ctr]).astype(np.float32),
+                             device=patches.device)[None]                   # (1,12)
+    resid = refine_head(patches[None], code12)[0].double().cpu().numpy()     # (6,) [drotvec(3), dg(3)]
+    cs = so3.cell_size_rad(L_rot) if L_rot > 0 else 1.0
+    edge = (1.0 / (2 ** L_trans)) if L_trans > 0 else 1.0
+    R = Rot.from_rotvec(resid[:3] * cs).as_matrix() @ R_fin
+    g = g_ctr + resid[3:] * edge
+    t = np.asarray(t_hat, np.float64) + np.asarray(A, np.float64) @ g
+    return R, t, lp
 
 
 # ---------------------------------------------------------------- SYMSOL-T pose-error eval ----

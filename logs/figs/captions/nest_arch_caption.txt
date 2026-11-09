@@ -1,0 +1,22 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_arch.pdf}
+  \caption{\textbf{The Hopf--HEALPix partition tree underlying NeST.}
+  \textbf{(A)}~Each equal-volume $SO(3)$ cell is the product of a HEALPix base
+  pixel on $S^2$ (equal-area; NESTED scheme, $12\,n_{\text{side}}^2$ pixels) and
+  a Hopf roll fibre $S^1$ split into $6\,n_{\text{side}}$ equal arcs, giving
+  $N(0)=12\times6=72$ cells at the root. Doubling $n_{\text{side}}$ splits every
+  base pixel into its four NESTED children and every roll arc into two, so each
+  node has exactly eight children. \textbf{(B)}~A ViT-B/16 encoder conditions a
+  per-level categorical: a $72$-way root $p_0(c_0\mid x)$ followed by $8$-way
+  conditionals $p(c_\ell\mid\cdot)$. Descending the gold ground-truth path refines
+  the cell containing the pose: the base pixel shrinks $\times4$ (real HEALPix
+  tilings at $n_{\text{side}}=1,2,4,8$; $12\!\to\!768$ pixels) and the roll arc
+  $\times2$ ($6\!\to\!48$ bins) every level. \textbf{(C)}~The log-density is the
+  sum of the path conditionals plus the constant cell density $\log(N/V)$, so the
+  model is exactly normalized ($\int p\,dR=1$), recovers the uniform density
+  exactly ($-\ln\pi^2$), and is scored in $O(L)$: only $L{+}1\approx7$ nodes
+  rather than the ${\sim}2.36$M cells of a flat grid at the same resolution.
+  All geometry is rendered from the actual construction in \texttt{so3\_nested.py}.}
+  \label{fig:nest_arch}
+\end{figure*}

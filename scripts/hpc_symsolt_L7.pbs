@@ -1,0 +1,50 @@
+#!/bin/bash
+#PBS -N symt_L7
+#PBS -P hpc.dtu.kavinder
+#PBS -q standard
+#PBS -l select=1:ncpus=12:ngpus=1:mem=96gb:centos=icelake
+#PBS -l walltime=24:00:00
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/symt_L7.out
+#PBS -e /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/symt_L7.err
+# SYMSOL-T SE(3) density at the DEEPER tree L=(7,7) — the no-new-component fix for the readout-resolution
+# ceiling (L5 caps trans@0.02~0.13; L7 floor ~1.0). STANDARD queue (scai_q is full with the T-LESS fan-out,
+# local GPUs are wedged). MUST pin centos=icelake: icelake GPU nodes (aice, A100-40GB) run glibc 2.34 and le-wm
+# imports clean (numpy 2.5.3 / torch 2.9.1+cu130, verified on cice001 job 1129042). The earlier un-pinned L7
+# job (1128934) landed on vsky015 (skylake, old glibc) and died "GLIBC_2.28/2.27 not found". Prepares L7 geometry on the
+# cluster (renders rsync'd to data/symsolt), then trains with roll-aug (the collapse fix) for 60k steps. Resume-aware.
+set -u
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python     # shared venv: use, never modify
+DATA=$ROOT/data/symsolt
+GEOM=$ROOT/data/symsolt_geom_L7
+RUN=$ROOT/checkpoints/se3_symsolt_L7_roll
+LOG=$RUN/train_hpc.log
+mkdir -p $RUN $ROOT/logs
+export PYTHONPATH=$ROOT/pylib:$ROOT/src:${PYTHONPATH:-}
+export XDG_CACHE_HOME=$ROOT/cache/xdg HF_HOME=$ROOT/cache/hf TORCH_HOME=$ROOT/cache/torch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 PYTHONUNBUFFERED=1
+cd $ROOT
+echo "=== $(date) job $PBS_JOBID symsolt L7 on $(hostname)" | tee -a $LOG
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | tee -a $LOG
+$PY -c "import torch,healpy,timm;print('torch',torch.__version__,'healpy',healpy.__version__,'timm',timm.__version__)" 2>&1 | tee -a $LOG
+
+# 1) prepare L=(7,7) geometry if missing (CPU; train/test live in separate render dirs; img_roots accumulates)
+if [ ! -f "$GEOM/train_cell0.npy" ]; then
+  echo "=== $(date) prepare L7 train" | tee -a $LOG
+  $PY src/se3_data.py prepare --root $DATA/train-45k --out $GEOM --L_rot 7 --L_trans 7 --splits train >> $LOG 2>&1
+fi
+if [ ! -f "$GEOM/test_cell0.npy" ]; then
+  echo "=== $(date) prepare L7 test" | tee -a $LOG
+  $PY src/se3_data.py prepare --root $DATA/test-5k --out $GEOM --L_rot 7 --L_trans 7 --splits test >> $LOG 2>&1
+fi
+
+# 2) train (resume-aware), roll-aug ON, 60k steps (matches the L5_roll protocol; L read from meta)
+if [ -f "$RUN/COMPLETE" ]; then echo "already COMPLETE -> nothing to do" | tee -a $LOG; exit 0; fi
+RESUME=""; [ -f "$RUN/last.pth" ] && RESUME="--resume $RUN/last.pth" && echo "resuming from last.pth" | tee -a $LOG
+$PY src/se3_train.py train --geom $GEOM --out $RUN --roll_aug \
+    --steps 60000 --bs 48 --workers 10 --save_every 2500 --eval_every 2500 $RESUME >> $LOG 2>&1
+rc=$?
+if [ $rc -eq 0 ]; then touch $RUN/COMPLETE; echo "=== $(date) SYMT_L7_DONE rc=0" | tee -a $LOG;
+else echo "=== $(date) SYMT_L7_EXIT rc=$rc (resume by re-qsub)" | tee -a $LOG; fi
+exit $rc

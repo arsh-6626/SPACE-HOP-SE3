@@ -147,8 +147,10 @@ def train(a):
     dens = dens_const(meta["L_rot"], meta["L_trans"], meta["box_half"])
     enc, head = build(meta, a.backbone, a.img_size, device, a.grad_ckpt)
     DS = sd.make_dataset_class()
-    full = DS(a.geom, "train")
+    full = DS(a.geom, "train", augment=getattr(a, "roll_aug", False))
     tr_idx, va_idx = stratified_val_split(full.label, a.val_frac, a.seed)
+    if getattr(a, "roll_aug", False):
+        print("roll augmentation: ON (exact in-plane roll relabel, train only)", flush=True)
     print(f"L=({meta['L_rot']},{meta['L_trans']}) N={se3.n_joint_cells(meta['L_rot'],meta['L_trans'])} "
           f"dens={dens:.3f} uniform-floor={uniform_floor(meta['box_half']):.3f} | "
           f"train {len(tr_idx)} | held-out val {len(va_idx)}", flush=True)
@@ -237,6 +239,8 @@ if __name__ == "__main__":
             p.add_argument("--eval_every", type=int, default=2500)
             p.add_argument("--val_frac", type=float, default=0.04); p.add_argument("--seed", type=int, default=0)
             p.add_argument("--grad_ckpt", action="store_true")
+            p.add_argument("--roll_aug", action="store_true",
+                           help="exact in-plane roll augmentation (train only): fixes rotation memorization")
             p.add_argument("--resume", default=None, help="checkpoint to resume enc/head/opt/sched/step from")
         else:
             p.add_argument("--ckpt", required=True)

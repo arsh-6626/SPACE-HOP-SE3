@@ -1,0 +1,19 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_so3_tree.pdf}
+  \caption{\textbf{SO(3) decode tree on one real SYMSOL image.} A single forward pass of the trained NeST head on
+  a cube (a discrete-symmetry shape), decoded through the $SO(3)$ tree and drawn as a multi-branch tree. The
+  \textbf{input image is the root node}; each level fans the MAP node into all $8$ children ($4$ HEALPix pixel
+  splits $\times$ $2$ Hopf-roll halves), shown as a row of nodes. Every node is a \textbf{true equal-area
+  Mollweide projection of the Hopf--HEALPix base sphere lifted into 3D} (a perspective card): filled HEALPix
+  pixels are the equal-volume $S^2$ binning, hue is the Hopf roll fibre (dial beneath), and the chosen cell is
+  gold. The root ($72$-way) places mass on the cube's several symmetric modes (multimodal by construction); grey
+  edges are the full branching and the thick gold spine is the beam-MAP root$\to$leaf path (width $\propto$
+  probability). The chosen cell refines $\times8$ (pixel $\times4$, roll $\times2$) each level. A \textbf{zoom inset}
+  (bottom right) magnifies the $\ell{=}3$ MAP node, cropping to its local $N_{\mathrm{side}}{=}8$ HEALPix
+  neighbourhood so the single refined cell (gold, pix $53$, roll $16/48$) is legible against the fine binning. The \textbf{output
+  3D orientation is the leaf node}: the predicted cube wireframe (red) on the input mask next to the nearest of
+  the $24$ symmetric ground-truth orientations (green), recovered to a $0.9^\circ$ geodesic error. The densities,
+  path, and branch probabilities are the model's genuine softmax.}
+  \label{fig:nest_so3_tree}
+\end{figure*}

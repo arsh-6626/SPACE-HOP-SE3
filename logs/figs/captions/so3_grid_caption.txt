@@ -1,0 +1,12 @@
+% Figure: so3_grid.pdf
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figs/so3_grid.pdf}
+  \caption{\textbf{Predicted $\mathrm{SO}(3)$ pose distributions on SYMSOL-I} from the single headline NeST model.
+  Each panel shows the predicted density for one solid, rendered as the canonical axis on an equal-area Mollweide
+  projection (marker size $\propto$ probability, hue $=$ in-plane roll); open circles mark the ground-truth symmetry
+  set. The number of recovered modes matches each solid's symmetry-group order---tetrahedron $12$, cube $24$,
+  icosahedron $60$, and the continuous great-circle (cone) and double-circle (cylinder) families---showing the model
+  captures full pose ambiguity rather than a single estimate.}
+  \label{fig:so3dist}
+\end{figure*}

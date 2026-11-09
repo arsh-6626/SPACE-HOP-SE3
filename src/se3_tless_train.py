@@ -23,7 +23,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, ConcatDataset
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import se3_tless_data as td
@@ -44,10 +44,11 @@ def build(L_rot, L_trans, backbone, img_size, device, grad_ckpt=False):
     return enc.to(device), head.to(device)
 
 
-def make_ds(a, split, t_hat, d_m, seed):
+def make_ds(a, split, t_hat, d_m, seed, augment=False, bbox_sj=0.0, bbox_cj=0.0):
     DS = td.make_dataset_class()
     return DS(a.root, a.cache, split, a.obj, a.L_rot, a.L_trans, d_m,
-              t_hat=t_hat, sigma=a.sigma, crop_pad=a.crop_pad, out_px=a.img_size, seed=seed)
+              t_hat=t_hat, sigma=a.sigma, crop_pad=a.crop_pad, out_px=a.img_size, seed=seed, augment=augment,
+              bbox_sj=bbox_sj, bbox_cj=bbox_cj)
 
 
 # ---------------------------------------------------------------- held-out val (single-GT LL, jittered t_hat) ----
@@ -77,7 +78,7 @@ def val_loglik(enc, head, val_ds, va_idx, device, L_rot, L_trans, bs, workers):
 def evaluate(enc, head, a, d_m, device, t_hat=None):
     enc.eval(); head.eval()
     t_hat = t_hat or a.test_that
-    ds = make_ds(a, "test_primesense", t_hat, d_m, seed=777)
+    ds = make_ds(a, a.test_split, t_hat, d_m, seed=777)
     dl = DataLoader(ds, batch_size=a.bs, shuffle=False, num_workers=a.workers, pin_memory=True,
                     collate_fn=td.Collate(a.L_rot, a.L_trans))
     sll, cnt, floor = 0.0, 0, 0.0
@@ -100,22 +101,42 @@ def train(a):
     d_m = td.diameters_m(a.root, [a.obj])[a.obj]
     enc, head = build(a.L_rot, a.L_trans, a.backbone, a.img_size, device, a.grad_ckpt)
 
-    train_ds = make_ds(a, "train_pbr", "jitter", d_m, seed=a.seed)
-    val_ds = make_ds(a, "train_pbr", "jitter", d_m, seed=a.seed)             # same rows; held-out indices below
-    n = len(train_ds)
+    tht = getattr(a, "t_hat_train", "jitter")
+    sj, cj = getattr(a, "bbox_sj", 0.12), getattr(a, "bbox_cj", 0.06)
+    pbr_ds = make_ds(a, "train_pbr", tht, d_m, seed=a.seed, augment=a.augment, bbox_sj=sj, bbox_cj=cj)
+    val_ds = make_ds(a, "train_pbr", tht, d_m, seed=a.seed, augment=False)   # val: clean anchor (no bbox jitter)
+    n = len(pbr_ds)
     rng = np.random.RandomState(a.seed); perm = rng.permutation(n)
     k = max(1, int(round(a.val_frac * n)))
     va_idx, tr_idx = perm[:k], perm[k:]
+    train_sub = Subset(pbr_ds, tr_idx)
+    # optional PBR+real: concat the real split (train_real / train_primesense) so the depth readout adapts to the
+    # real domain (synth->real gap: the net corrects depth on PBR but not on real). Real index must be in a.cache.
+    real_split = getattr(a, "real_split", "") or ""
+    if real_split:
+        real_path = f"{a.cache}/{real_split}_obj{a.obj}.npz"
+        if not os.path.exists(real_path):
+            raise FileNotFoundError(f"--real_split {real_split} but index missing: {real_path}")
+        real_ds = make_ds(a, real_split, tht, d_m, seed=a.seed + 1, augment=a.augment, bbox_sj=sj, bbox_cj=cj)
+        train_data = ConcatDataset([train_sub, real_ds])
+        n_real = len(real_ds)
+    else:
+        train_data = train_sub; n_real = 0
     N = se3.n_joint_cells(a.L_rot, a.L_trans)
-    print(f"obj {a.obj} d={d_m*1000:.1f}mm L=({a.L_rot},{a.L_trans}) N={N} | train {len(tr_idx)} | "
-          f"held-out val {len(va_idx)} | uniform NLL(cell)=lnN={np.log(N):.3f}", flush=True)
+    print(f"obj {a.obj} d={d_m*1000:.1f}mm L=({a.L_rot},{a.L_trans}) N={N} | train_pbr {len(tr_idx)} + "
+          f"{real_split or 'no-real'} {n_real} | held-out val {len(va_idx)} | t_hat={tht} | "
+          f"uniform NLL(cell)=lnN={np.log(N):.3f}", flush=True)
 
-    dl = DataLoader(Subset(train_ds, tr_idx), batch_size=a.bs, shuffle=True, num_workers=a.workers, drop_last=True,
+    dl = DataLoader(train_data, batch_size=a.bs, shuffle=True, num_workers=a.workers, drop_last=True,
                     pin_memory=True, persistent_workers=a.workers > 0, collate_fn=td.Collate(a.L_rot, a.L_trans))
     opt = torch.optim.AdamW([{"params": enc.parameters(), "lr": a.lr_bb},
                              {"params": head.parameters(), "lr": a.lr}], weight_decay=0.05)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[a.lr_bb, a.lr], total_steps=a.steps, pct_start=0.05)
     step, t0, run, best = 0, time.time(), 0.0, -1e9
+    if getattr(a, "init", None) and os.path.exists(a.init):
+        ck = torch.load(a.init, map_location=device, weights_only=False)   # warm-start: weights only, fresh opt/step
+        enc.load_state_dict(ck["enc"]); head.load_state_dict(ck["head"])
+        print(f"warm-started weights from {a.init} (fresh optimizer/schedule)", flush=True)
     if getattr(a, "resume", None) and os.path.exists(a.resume):
         ck = torch.load(a.resume, map_location=device, weights_only=False)
         enc.load_state_dict(ck["enc"]); head.load_state_dict(ck["head"])
@@ -158,13 +179,13 @@ def train(a):
             if step >= a.steps:
                 break
     validate()
-    if os.path.exists(f"{a.cache}/test_primesense_obj{a.obj}.npz"):
+    if os.path.exists(f"{a.cache}/{a.test_split}_obj{a.obj}.npz"):
         print("=== final eval (real test, best.pth) ===", flush=True)
         ck = torch.load(f"{a.out}/best.pth", map_location=device, weights_only=False)
         enc.load_state_dict(ck["enc"]); head.load_state_dict(ck["head"])
         evaluate(enc, head, a, d_m, device)
     else:
-        print(f"=== test index missing ({a.cache}/test_primesense_obj{a.obj}.npz); run eval later ===", flush=True)
+        print(f"=== test index missing ({a.cache}/{a.test_split}_obj{a.obj}.npz); run eval later ===", flush=True)
 
 
 def load_eval(a):
@@ -189,8 +210,10 @@ def _common(p):
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--sigma", type=float, default=0.25)
     p.add_argument("--crop_pad", type=float, default=1.4)
-    p.add_argument("--test_that", default="gt", choices=["gt", "jitter"],
-                   help="test-time t_hat: 'gt'=oracle detection (g=0), 'jitter'=simulated detector noise")
+    p.add_argument("--test_that", default="gt", choices=["gt", "jitter", "bbox"],
+                   help="test-time t_hat: 'gt'=oracle(g=0), 'jitter'=sim detector noise, 'bbox'=2D-box back-projection (real anchor)")
+    p.add_argument("--test_split", default="test_primesense",
+                   help="real-test split name (T-LESS: test_primesense; YCB-V: test)")
 
 
 if __name__ == "__main__":
@@ -202,6 +225,14 @@ if __name__ == "__main__":
     pt.add_argument("--save_every", type=int, default=5000); pt.add_argument("--eval_every", type=int, default=2000)
     pt.add_argument("--val_frac", type=float, default=0.04); pt.add_argument("--seed", type=int, default=0)
     pt.add_argument("--grad_ckpt", action="store_true")
+    pt.add_argument("--augment", action="store_true", help="in-plane viewing-axis roll relabel on train_pbr (fixes memorization collapse)")
+    pt.add_argument("--t_hat_train", default="jitter", choices=["jitter", "bbox"],
+                    help="train anchor: 'jitter'=GT+noise (legacy), 'bbox'=2D-box back-projection (matches test, FastPose-style)")
+    pt.add_argument("--real_split", default="",
+                    help="optional real split to concat with train_pbr for domain adaptation (YCB-V: train_real; T-LESS: train_primesense)")
+    pt.add_argument("--bbox_sj", type=float, default=0.12, help="bbox-anchor scale jitter (train only, bbox mode)")
+    pt.add_argument("--bbox_cj", type=float, default=0.06, help="bbox-anchor centre jitter (train only, bbox mode)")
+    pt.add_argument("--init", default=None, help="warm-start: load enc+head weights from this ckpt, fresh optimizer/step")
     pt.add_argument("--resume", default=None)
     pe = sub.add_parser("eval"); _common(pe)
     pe.add_argument("--ckpt", required=True)

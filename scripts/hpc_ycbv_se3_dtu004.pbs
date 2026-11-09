@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N ycba_d4
+#PBS -P hpc.dtu.kavinder
+#PBS -q standard
+#PBS -l select=1:ncpus=16:ngpus=1:mem=64gb:centos=icelake
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -o /scratch/hpc/visitor/dtu004.visitor/spacehop/logs/
+# NeST SE(3) per-object YCB-V trainer, run from the dtu004 account to parallelise the real-data gates:
+# dtu001 runs T-LESS, dtu004 runs YCB-V, both fanned across the standard queue (per-user max_run=50).
+# Mirrors the user's cross-account pattern: reads code/data/venv from the dtu001 project dir (world-readable
+# scratch); writes cache + checkpoints to dtu004 scratch. Env = copy of dtu001's validated le-wm venv
+# (torch 2.9.1+cu130); healpy from P/pylib. Pass object via `qsub -v OBJ=<n>` (YCB-V objects 1..21).
+# centos pin (icelake|genoa) set per-submit via qsub -l select override; both run le-wm (glibc 2.34).
+set -u
+OBJ="${OBJ:-1}"
+TAG="${TAG:-_aug}"
+AUG="${AUG:-1}"
+P=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP                        # read-only: code, pylib, venv copy
+BOP=/scratch/hpc/visitor/dtu001.visitor/liepose/data/bop_datasets/ycbv # read-only BOP tree
+W=/scratch/hpc/visitor/dtu004.visitor/spacehop                        # dtu004-writable
+PY=$P/le-wm-venv/bin/python
+CACHE=$W/cache/ycbv_se3
+RUN=$W/checkpoints/se3_ycbv${TAG}_obj${OBJ}
+AUGF=""; [ "$AUG" = 1 ] && AUGF="--augment"
+LOG=$RUN/train_hpc.log
+mkdir -p $CACHE $RUN $W/logs
+export PYTHONPATH=$P/pylib:$P/src:${PYTHONPATH:-}
+export XDG_CACHE_HOME=$W/cache/xdg HF_HOME=$W/cache/hf TORCH_HOME=$W/cache/torch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 PYTHONUNBUFFERED=1
+cd $P
+echo "=== $(date) job $PBS_JOBID ycbv(dtu004) obj $OBJ on $(hostname)" | tee -a $LOG
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | tee -a $LOG
+$PY -c "import torch,healpy,timm;print('torch',torch.__version__,'healpy',healpy.__version__,'timm',timm.__version__,'cuda',torch.cuda.is_available())" 2>&1 | tee -a $LOG
+
+for SPLIT in train_pbr test; do
+  if [ ! -f "$CACHE/${SPLIT}_obj${OBJ}.npz" ]; then
+    echo "=== $(date) indexing $SPLIT obj $OBJ" | tee -a $LOG
+    $PY src/se3_tless_data.py index --root $BOP --out $CACHE --objs $OBJ --split $SPLIT >> $LOG 2>&1
+  fi
+done
+
+# Hard CUDA guard (standard-queue node driver may be too old for torch cu130, or trainer could fall to CPU).
+# No CUDA here = we landed on a node with a faulted/invisible GPU (e.g. scai04). Since this PBS forbids
+# node-pinning, PARK the faulted node: sleep ~25min holding it so the scheduler gives the next unpinned
+# submit a healthy node, then exit 3 (topper resubmits this obj). Cheap (~0.4 GPU-h, cost_factor 1) and
+# wastes no working GPU. Normal case (CUDA present) skips this entirely.
+$PY -c "import torch,sys;sys.exit(0 if torch.cuda.is_available() else 3)" || { echo "=== FATAL no CUDA on $(hostname) -> parking faulted node ~25min ===" | tee -a $LOG; sleep 1500; exit 3; }
+if [ -f "$RUN/COMPLETE" ]; then echo "obj $OBJ already COMPLETE -> nothing to do" | tee -a $LOG; exit 0; fi
+RESUME=""; [ -f "$RUN/last.pth" ] && RESUME="--resume $RUN/last.pth" && echo "resuming from $RUN/last.pth" | tee -a $LOG
+$PY src/se3_tless_train.py train \
+    --root $BOP --cache $CACHE --obj $OBJ --out $RUN --test_split test $AUGF \
+    --L_rot 5 --L_trans 5 --steps 40000 --bs 48 --workers 14 \
+    --save_every 2500 --eval_every 2000 --test_that gt $RESUME >> $LOG 2>&1
+rc=$?
+if [ $rc -eq 0 ]; then touch $RUN/COMPLETE; echo "=== $(date) YCBV_OBJ${OBJ}_DONE rc=0" | tee -a $LOG;
+else echo "=== $(date) YCBV_OBJ${OBJ}_EXIT rc=$rc (resume by re-qsub)" | tee -a $LOG; fi
+exit $rc

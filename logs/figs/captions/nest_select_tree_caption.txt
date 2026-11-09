@@ -1,0 +1,19 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/nest_select_tree.pdf}
+  \caption{\textbf{Decoding NeST is a multi-branch tree: selection and refinement.}
+  A real beam search ($B{=}3$) over the SE(3) partition of \texttt{se3\_tree.py}
+  (YCB-V object 3, scene 51/1629). Each row is a level $\ell$; each node is one kept
+  SE(3) cell, drawn as a rotation HEALPix tile on the Hopf base sphere (hue = roll)
+  next to a translation octree cube with the chosen octant filled. \emph{Selection:}
+  every node has $64$ children ($8$ rotation $\times\,8$ translation octants); the
+  edges are the genuine child conditionals $p(c\mid\text{parent})$ (width $\propto$
+  probability), only the top-$B$ are kept (faint stubs are the $61$ pruned children),
+  and gold marks the beam-MAP path. \emph{Refinement:} descending one level
+  multiplies the cell count by $8$ ($N(\ell)=72\cdot8^{\ell}$, left), subdividing
+  the HEALPix pixel $\times4$ (the tile shrinks) and the octree octant $\times8$, so
+  the kept cell localizes from the whole group to a single pose. The beam-MAP leaf
+  reads out the 6D pose $(R,t)$, shown as the predicted 3D box. The companion figure
+  gives the network that produces each node's conditional.}
+  \label{fig:nest_select_tree}
+\end{figure*}

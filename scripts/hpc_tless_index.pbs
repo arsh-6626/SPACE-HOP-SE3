@@ -1,0 +1,30 @@
+#!/bin/bash
+#PBS -N tls_idx
+#PBS -P hpc.dtu.kavinder
+#PBS -q standard
+#PBS -l select=1:ncpus=8:mem=32gb:centos=icelake
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /scratch/hpc/visitor/dtu001.visitor/SPACE-HOP/logs/tls_idx.out
+# CPU-only canary: builds the per-object T-LESS index caches for ALL remaining objects in one go, as dtu001.
+# Validates env + paths before the GPU fan-out, and keeps GPU jobs from spending allocation on indexing.
+# Pass the object list via `qsub -v OBJS=9,10,...`. Both splits (train_pbr + test_primesense).
+set -u
+OBJS="${OBJS:?pass -v OBJS=9+10+11 (plus-separated; commas break qsub -v)}"
+OBJS="${OBJS//+/,}"
+ROOT=/scratch/hpc/visitor/dtu001.visitor/SPACE-HOP
+BOP=/scratch/hpc/visitor/dtu001.visitor/liepose/data/bop_datasets/tless
+PY=/home/hpc/visitor/dtu001.visitor/le-wm/.venv/bin/python
+CACHE=$ROOT/cache/tless_se3
+mkdir -p $CACHE $ROOT/logs
+export PYTHONPATH=$ROOT/pylib:$ROOT/src:${PYTHONPATH:-}
+export HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
+cd $ROOT
+echo "=== $(date) tless index objs=$OBJS on $(hostname)"
+$PY -c "import numpy,torch;print('numpy',numpy.__version__,'torch',torch.__version__)"
+for SPLIT in train_pbr test_primesense; do
+  echo "=== $(date) indexing $SPLIT objs $OBJS ==="
+  $PY src/se3_tless_data.py index --root $BOP --out $CACHE --objs $OBJS --split $SPLIT || exit 1
+done
+echo "=== $(date) TLS_IDX_DONE ==="
+ls -la $CACHE | tail -8

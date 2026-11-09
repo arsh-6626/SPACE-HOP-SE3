@@ -57,18 +57,30 @@ class SymsolDensityHead(nn.Module):
     """Level-0: 72 learned queries cross-attend to patches -> 72 logits. Children: one shared scorer whose 8 queries
     are built from each child's normalised offset from the parent, the Fourier-encoded parent rotation, and a level
     embedding -> 8 logits. All log-softmax, so the tree is a normalised distribution by construction."""
-    def __init__(self, embed_dim=768, max_level=5, n_freq=3, n_layers=2, heads=8):
+    def __init__(self, embed_dim=768, max_level=5, n_freq=3, n_layers=2, heads=8,
+                 use_offset=True, use_parent=True, use_level=True, use_fourier=True, per_level_scorer=False):
         super().__init__()
         self.max_level = max_level
         self.n_freq = n_freq
+        # ablation toggles (abl-cond / abl-misc). Defaults reproduce the original architecture byte-for-byte so prior
+        # checkpoints load unchanged; a toggle only alters structure when set away from its default.
+        self.use_offset, self.use_parent = use_offset, use_parent
+        self.use_level, self.use_fourier = use_level, use_fourier
+        self.per_level_scorer = per_level_scorer
+        assert use_offset or use_parent, "child scorer needs at least one of offset/parent to distinguish children"
         self.l0_query = nn.Embedding(72, embed_dim)
         self.l0_attn = _CrossAttn(embed_dim, n_layers, heads)
         self.level_emb = nn.Embedding(max_level, embed_dim)
-        off_dim = 3 + 6 * n_freq                                  # fourier_encode(offset[3])
-        par_dim = 9 + 18 * n_freq                                 # fourier_encode(parent flat[9])
-        self.child_proj = nn.Sequential(nn.Linear(off_dim + par_dim, embed_dim), nn.GELU(),
-                                        nn.Linear(embed_dim, embed_dim))
-        self.child_attn = _CrossAttn(embed_dim, n_layers, heads)
+        off_dim = (3 + 6 * n_freq) if use_fourier else 3         # fourier_encode(offset[3]) or raw
+        par_dim = (9 + 18 * n_freq) if use_fourier else 9        # fourier_encode(parent flat[9]) or raw
+        in_dim = (off_dim if use_offset else 0) + (par_dim if use_parent else 0)
+        mk_proj = lambda: nn.Sequential(nn.Linear(in_dim, embed_dim), nn.GELU(), nn.Linear(embed_dim, embed_dim))
+        if per_level_scorer:                                     # separate child scorer per level (abl-misc)
+            self.child_proj_pl = nn.ModuleList([mk_proj() for _ in range(max_level)])
+            self.child_attn_pl = nn.ModuleList([_CrossAttn(embed_dim, n_layers, heads) for _ in range(max_level)])
+        else:                                                   # one shared scorer (default) -- keeps original keys
+            self.child_proj = mk_proj()
+            self.child_attn = _CrossAttn(embed_dim, n_layers, heads)
 
     def logp0(self, patches):
         """patches (B,P,D) -> (B,72) log-softmax over the level-0 cells."""
@@ -78,12 +90,23 @@ class SymsolDensityHead(nn.Module):
 
     def child_logp(self, patches, child_off, parent_enc, level):
         """Score the 8 children of one node per sample.
-        patches (B,P,D); child_off (B,8,3) normalised offsets; parent_enc (B,9) parent flat; level int -> (B,8)."""
-        B = patches.shape[0]
-        off = fourier_encode(child_off, self.n_freq)                              # (B,8,off_dim)
-        par = fourier_encode(parent_enc, self.n_freq).unsqueeze(1).expand(-1, 8, -1)
-        q = self.child_proj(torch.cat([off, par], -1)) + self.level_emb.weight[level]
-        return self.child_attn(q, patches).log_softmax(-1)                        # (B,8)
+        patches (B,P,D); child_off (B,8,3) normalised offsets; parent_enc (B,9) parent flat; level int -> (B,8).
+        Conditioning components (offset / parent / level-emb / Fourier) are gated by the abl-cond toggles; the child
+        scorer is shared across levels unless per_level_scorer (abl-misc)."""
+        enc = (lambda t: fourier_encode(t, self.n_freq)) if self.use_fourier else (lambda t: t)
+        nb = child_off.shape[1]                                                    # children per node: 8, or 8**k (abl-arity)
+        parts = []
+        if self.use_offset:
+            parts.append(enc(child_off))                                          # (B,nb,off_dim)
+        if self.use_parent:
+            parts.append(enc(parent_enc).unsqueeze(1).expand(-1, nb, -1))         # (B,nb,par_dim)
+        feat = torch.cat(parts, -1) if len(parts) > 1 else parts[0]
+        proj = self.child_proj_pl[level] if self.per_level_scorer else self.child_proj
+        attn = self.child_attn_pl[level] if self.per_level_scorer else self.child_attn
+        q = proj(feat)
+        if self.use_level:
+            q = q + self.level_emb.weight[level]
+        return attn(q, patches).log_softmax(-1)                                   # (B,8)
 
     def path_loglik(self, patches, cell0, child_idx, child_off, parent_enc, level):
         """log P(finest cell) for one path per sample (used for both NLL and eval, minus the density constant).
