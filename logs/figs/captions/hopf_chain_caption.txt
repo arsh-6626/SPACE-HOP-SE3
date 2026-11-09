@@ -1,0 +1,14 @@
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/hopf_chain.pdf}
+  \caption{\textbf{The Hopf--HEALPix discretization of $SO(3)$.} A single construction chain. The Hopf map
+  $h:S^3\to S^2$ factors a rotation (Haar volume $\pi^2$) into a base point on $S^2$ and a roll angle on the
+  $S^1$ fibre. The base sphere is partitioned by \textbf{HEALPix} into $N_{\mathrm{pix}}=12N_{\mathrm{side}}^2$
+  \emph{equal-area} pixels and the roll into $N_\psi=6N_{\mathrm{side}}$ uniform bins; their product gives
+  \textbf{equivolumetric} cells of measure $\mu(\mathrm{cell})=\pi^2/N(\ell)$, indexed by
+  $c=\mathrm{pix}\cdot n_{\mathrm{roll}}+\mathrm{roll}$. Doubling $N_{\mathrm{side}}$ splits each pixel into $4$
+  (HEALPix NESTED) and each roll bin into $2$, an $\times8$ equivolumetric refinement giving the hierarchical tree
+  with $N(\ell)=72\cdot 8^{\ell}$ leaves. Every panel is a shaded $S^2$ globe in the same style as the decode-tree
+  figures; the followed cell is gold with its Hopf roll fibre ring.}
+  \label{fig:hopf_chain}
+\end{figure*}
